@@ -1,0 +1,26 @@
+{
+  "name": "big-system-v1.2-backend",
+  "version": "1.2.0",
+  "description": "Standalone M-Pesa & Airtime Disbursement Engine",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+  "start": "node src/server.js",
+  "dev": "nodemon src/server.js"
+  },
+  "author": "Samtext-Tel:0712071385",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.95.3",
+    "axios": "^1.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.18.2",
+    "mysql2": "^3.6.1",
+    "node-cron": "^3.0.2",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

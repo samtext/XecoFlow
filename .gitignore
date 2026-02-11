@@ -1,0 +1,13 @@
+# This Ignore Dependency folders (The "Pantry")
+node_modules/
+
+# This Ignore Secrets and API Keys (The "Vault")
+.env
+
+# This Ignore Logs (Recording errors)
+npm-debug.log*
+logs/
+*.log
+
+# This Ignore System files
+.DS_Store
