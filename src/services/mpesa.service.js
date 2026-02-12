@@ -79,7 +79,7 @@ class MpesaService {
                 return false;
             }
             
-            const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = rawData.Body.stkCallback;
+            const { CheckoutRequestID, MerchantRequestID, ResultCode, ResultDesc, CallbackMetadata } = rawData.Body.stkCallback;
             console.log(`📡 PROCESSING CALLBACK: ID ${CheckoutRequestID} | Result: ${ResultCode} (${ResultDesc})`);
 
             // Define status based on Safaricom ResultCodes
@@ -97,17 +97,20 @@ class MpesaService {
             /**
              * DB HANDSHAKE
              * Using db.mpesa_logs() as a function to match your Advanced Manager (db.js).
+             * Aligned with your specific table schema: mpesa_callback_logs
              */
             const { error } = await db.mpesa_logs()
                 .update({ 
-                    status: finalStatus,
+                    merchant_request_id: MerchantRequestID,
+                    status: finalStatus, // Note: Ensure you ran the ALTER TABLE SQL to add this column
+                    raw_payload: rawData.Body.stkCallback, // Maps to your 'raw_payload' JSONB column
                     metadata: { 
-                        callback_raw: rawData.Body.stkCallback, 
                         mpesa_receipt: mpesaReceipt,
-                        processed_at: new Date().toISOString() 
+                        processed_at: new Date().toISOString(),
+                        result_desc: ResultDesc
                     }
                 })
-                .eq('checkout_id', CheckoutRequestID);
+                .eq('checkout_request_id', CheckoutRequestID); // Matches your schema column name
 
             if (error) {
                 console.error("📑 DB UPDATE ERROR:", error.message);
