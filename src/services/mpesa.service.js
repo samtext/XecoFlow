@@ -95,26 +95,41 @@ class MpesaService {
             }
 
             /**
-             * DB HANDSHAKE
-             * Using db.mpesa_logs() as a function to match your Advanced Manager (db.js).
+             * DB HANDSHAKE 1: Update Logs
              * Aligned with your specific table schema: mpesa_callback_logs
              */
-            const { error } = await db.mpesa_logs()
+            const { error: logError } = await db.mpesa_logs()
                 .update({ 
                     merchant_request_id: MerchantRequestID,
-                    status: finalStatus, // Note: Ensure you ran the ALTER TABLE SQL to add this column
-                    raw_payload: rawData.Body.stkCallback, // Maps to your 'raw_payload' JSONB column
+                    status: finalStatus,
+                    raw_payload: rawData.Body.stkCallback,
                     metadata: { 
                         mpesa_receipt: mpesaReceipt,
                         processed_at: new Date().toISOString(),
                         result_desc: ResultDesc
                     }
                 })
-                .eq('checkout_request_id', CheckoutRequestID); // Matches your schema column name
+                .eq('checkout_request_id', CheckoutRequestID);
 
-            if (error) {
-                console.error("📑 DB UPDATE ERROR:", error.message);
+            if (logError) {
+                console.error("📑 DB LOG UPDATE ERROR:", logError.message);
                 return false;
+            }
+
+            /**
+             * DB HANDSHAKE 2: Sync main transaction status
+             * Updates 'airtime_transactions' table so the user's dashboard changes from PENDING.
+             */
+            const { error: transError } = await db.from('airtime_transactions')
+                .update({ 
+                    status: finalStatus,
+                    mpesa_receipt: mpesaReceipt,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('checkout_id', CheckoutRequestID);
+
+            if (transError) {
+                console.error("📑 AIRTIME_TRANS UPDATE ERROR:", transError.message);
             }
 
             console.log(`✅ DB UPDATED: ${CheckoutRequestID} set to ${finalStatus}`);
