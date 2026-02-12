@@ -1,11 +1,12 @@
 import axios from 'axios';
 import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/mpesa.js';
 import { db } from '../config/db.js';
+// Import System Constants to follow the 'Laws of Physics'
+import { TX_STATES, MPESA_STATUS_CODES } from '../config/systemRules.js';
 
 class MpesaService {
     /**
      * AUTHENTICATION: Get Access Token
-     * Required to authorize the STK Push request.
      */
     async getAccessToken() {
         try {
@@ -23,11 +24,9 @@ class MpesaService {
 
     /**
      * INITIATE STK PUSH
-     * Logic: Prepares payload, generates credentials, and hits Safaricom API.
      */
     async sendStkPush(phoneNumber, amount, accountReference, token) {
         try {
-            // Use provided token or fetch a new one
             const accessToken = token || await this.getAccessToken();
             const timestamp = getMpesaTimestamp();
             const password = generateSTKPassword(timestamp);
@@ -41,11 +40,9 @@ class MpesaService {
                 TransactionType: "CustomerBuyGoodsOnline", 
                 Amount: Math.round(amount),
                 PartyA: phoneNumber,
-                // Ensure PartyB is the specific Till/ShortCode required for production
                 PartyB: process.env.MPESA_BUSINESS_TILL || mpesaConfig.shortCode, 
                 PhoneNumber: phoneNumber,
                 CallBackURL: mpesaConfig.callbackUrl,
-                // AccountReference must not have spaces and is capped at 12 chars
                 AccountReference: accountReference.replace(/\s/g, '').substring(0, 12), 
                 TransactionDesc: `Airtime Purchase`
             };
@@ -69,11 +66,10 @@ class MpesaService {
 
     /**
      * HANDLE CALLBACK FROM SAFARICOM
-     * Logic: Extracts metadata and updates the DB using the XECO-ENGINE manager.
+     * Logic: Records Evidence First (Insert), then Updates Transaction State.
      */
     async handleCallback(rawData) {
         try {
-            // Check if payload contains the necessary Body object
             if (!rawData?.Body?.stkCallback) {
                 console.warn("⚠️ MALFORMED CALLBACK: No stkCallback body found.");
                 return false;
@@ -82,43 +78,42 @@ class MpesaService {
             const { CheckoutRequestID, MerchantRequestID, ResultCode, ResultDesc, CallbackMetadata } = rawData.Body.stkCallback;
             console.log(`📡 PROCESSING CALLBACK: ID ${CheckoutRequestID} | Result: ${ResultCode} (${ResultDesc})`);
 
-            // UPDATED: Using exact strings from your SQL ENUM 'transaction_status'
-            // This prevents the "invalid input value" error in airtime_transactions
-            let finalStatus = 'PAYMENT_FAILED';
-            if (ResultCode === 0) finalStatus = 'PAYMENT_SUCCESS';
+            // Use TX_STATES and MPESA_STATUS_CODES constants for strict ENUM compliance
+            let finalStatus = TX_STATES.PAYMENT_FAILED;
+            if (String(ResultCode) === MPESA_STATUS_CODES.MPESA_SUCCESS_CODE) {
+                finalStatus = TX_STATES.PAYMENT_SUCCESS;
+            }
 
             let mpesaReceipt = null;
-            // Extract Receipt Number only on success
             if (ResultCode === 0 && CallbackMetadata?.Item) {
                 const receiptItem = CallbackMetadata.Item.find(item => item.Name === 'MpesaReceiptNumber');
                 mpesaReceipt = receiptItem ? receiptItem.Value : null;
             }
 
             /**
-             * DB HANDSHAKE 1: Update Logs
-             * Aligned with your specific table schema: mpesa_callback_logs
+             * DB HANDSHAKE 1: Record Evidence (PAYMENT EVIDENCE LAYER)
+             * Changed to .insert() because every callback is a unique event proof.
              */
             const { error: logError } = await db.mpesa_logs()
-                .update({ 
+                .insert([{ 
+                    checkout_request_id: CheckoutRequestID,
                     merchant_request_id: MerchantRequestID,
                     status: finalStatus,
                     raw_payload: rawData.Body.stkCallback,
                     metadata: { 
                         mpesa_receipt: mpesaReceipt,
                         processed_at: new Date().toISOString(),
-                        result_desc: ResultDesc
+                        result_desc: ResultDesc,
+                        result_code: ResultCode
                     }
-                })
-                .eq('checkout_request_id', CheckoutRequestID);
+                }]);
 
             if (logError) {
-                console.error("📑 DB LOG UPDATE ERROR:", logError.message);
-                return false;
+                console.error("📑 DB LOG INSERT ERROR:", logError.message);
             }
 
             /**
-             * DB HANDSHAKE 2: Sync main transaction status
-             * Now using 'PAYMENT_FAILED' or 'PAYMENT_SUCCESS' to match your DB schema.
+             * DB HANDSHAKE 2: Sync main transaction status (RETAIL LAYER)
              */
             const { error: transError } = await db.airtime_transactions()
                 .update({ 
