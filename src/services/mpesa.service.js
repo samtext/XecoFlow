@@ -1,12 +1,12 @@
 import axios from 'axios';
 import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/mpesa.js';
 import { db } from '../config/db.js';
-// Import System Constants to follow the 'Laws of Physics'
 import { TX_STATES, MPESA_STATUS_CODES } from '../config/systemRules.js';
 
 class MpesaService {
     /**
      * AUTHENTICATION: Get Access Token
+     * Dynamically pulls from production/sandbox based on your config.
      */
     async getAccessToken() {
         try {
@@ -30,8 +30,6 @@ class MpesaService {
             const accessToken = token || await this.getAccessToken();
             const timestamp = getMpesaTimestamp();
             const password = generateSTKPassword(timestamp);
-
-            console.log(`📡 SENDING CALLBACK URL: ${mpesaConfig.callbackUrl}`);
 
             const payload = {
                 BusinessShortCode: mpesaConfig.shortCode, 
@@ -66,68 +64,78 @@ class MpesaService {
 
     /**
      * HANDLE CALLBACK FROM SAFARICOM
-     * Logic: Records Evidence First (Insert), then Updates Transaction State.
+     * Supports both STK Push and Manual C2B (Lipa Na Mpesa)
      */
-    async handleCallback(rawData) {
+    async handleCallback(rawData, ipAddress = '0.0.0.0') {
         try {
-            if (!rawData?.Body?.stkCallback) {
-                console.warn("⚠️ MALFORMED CALLBACK: No stkCallback body found.");
-                return false;
-            }
-            
-            const { CheckoutRequestID, MerchantRequestID, ResultCode, ResultDesc, CallbackMetadata } = rawData.Body.stkCallback;
-            console.log(`📡 PROCESSING CALLBACK: ID ${CheckoutRequestID} | Result: ${ResultCode} (${ResultDesc})`);
-
-            // Use TX_STATES and MPESA_STATUS_CODES constants for strict ENUM compliance
             let finalStatus = TX_STATES.PAYMENT_FAILED;
-            if (String(ResultCode) === MPESA_STATUS_CODES.MPESA_SUCCESS_CODE) {
-                finalStatus = TX_STATES.PAYMENT_SUCCESS;
-            }
-
             let mpesaReceipt = null;
-            if (ResultCode === 0 && CallbackMetadata?.Item) {
-                const receiptItem = CallbackMetadata.Item.find(item => item.Name === 'MpesaReceiptNumber');
-                mpesaReceipt = receiptItem ? receiptItem.Value : null;
+            let checkoutId = null;
+            let resultDesc = "Processed";
+            let resultCode = 0;
+            let merchantId = null;
+
+            // --- 1. DETECT PAYLOAD TYPE ---
+            
+            // TYPE A: STK PUSH (Has .Body object)
+            if (rawData?.Body?.stkCallback) {
+                const cb = rawData.Body.stkCallback;
+                checkoutId = cb.CheckoutRequestID;
+                merchantId = cb.MerchantRequestID;
+                resultCode = cb.ResultCode;
+                resultDesc = cb.ResultDesc;
+
+                if (String(resultCode) === MPESA_STATUS_CODES.MPESA_SUCCESS_CODE) {
+                    finalStatus = TX_STATES.PAYMENT_SUCCESS;
+                    const receiptItem = cb.CallbackMetadata?.Item?.find(i => i.Name === 'MpesaReceiptNumber');
+                    mpesaReceipt = receiptItem ? receiptItem.Value : null;
+                }
+            } 
+            // TYPE B: MANUAL C2B (Flat object with TransID)
+            else if (rawData?.TransID) {
+                mpesaReceipt = rawData.TransID;
+                resultDesc = "C2B Confirmation Received";
+                finalStatus = TX_STATES.PAYMENT_SUCCESS;
+                // Manual matching: usually uses BillRefNumber or MSISDN
+                checkoutId = rawData.BillRefNumber; 
             }
 
-            /**
-             * DB HANDSHAKE 1: Record Evidence (PAYMENT EVIDENCE LAYER)
-             * Changed to .insert() because every callback is a unique event proof.
-             */
-            const { error: logError } = await db.mpesa_logs()
-                .insert([{ 
-                    checkout_request_id: CheckoutRequestID,
-                    merchant_request_id: MerchantRequestID,
-                    status: finalStatus,
-                    raw_payload: rawData.Body.stkCallback,
-                    metadata: { 
-                        mpesa_receipt: mpesaReceipt,
-                        processed_at: new Date().toISOString(),
-                        result_desc: ResultDesc,
-                        result_code: ResultCode
-                    }
-                }]);
-
-            if (logError) {
-                console.error("📑 DB LOG INSERT ERROR:", logError.message);
-            }
+            console.log(`📡 PROCESSING: ID ${checkoutId} | Receipt: ${mpesaReceipt} | Status: ${finalStatus}`);
 
             /**
-             * DB HANDSHAKE 2: Sync main transaction status (RETAIL LAYER)
+             * DB HANDSHAKE 1: Record Evidence
              */
-            const { error: transError } = await db.airtime_transactions()
-                .update({ 
-                    status: finalStatus,
+            const { error: logError } = await db.mpesa_logs().insert([{ 
+                checkout_request_id: checkoutId || 'UNKNOWN',
+                merchant_request_id: merchantId,
+                status: finalStatus,
+                raw_payload: rawData.Body?.stkCallback || rawData,
+                ip_address: ipAddress,
+                metadata: { 
                     mpesa_receipt: mpesaReceipt,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('checkout_id', CheckoutRequestID);
+                    processed_at: new Date().toISOString(),
+                    result_desc: resultDesc,
+                    result_code: resultCode
+                }
+            }]);
 
-            if (transError) {
-                console.error("📑 AIRTIME_TRANS UPDATE ERROR:", transError.message);
+            if (logError) console.error("📑 DB LOG INSERT ERROR:", logError.message);
+
+            /**
+             * DB HANDSHAKE 2: Sync main transaction status
+             */
+            if (checkoutId) {
+                const { error: transError } = await db.airtime_transactions()
+                    .update({ 
+                        status: finalStatus,
+                        mpesa_receipt: mpesaReceipt,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('checkout_id', checkoutId);
+
+                if (transError) console.error("📑 TRANS UPDATE ERROR:", transError.message);
             }
 
-            console.log(`✅ DB UPDATED: ${CheckoutRequestID} set to ${finalStatus}`);
             return true;
         } catch (err) {
             console.error("❌ CALLBACK_LOGIC_CRASH:", err.message);
