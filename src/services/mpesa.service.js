@@ -118,9 +118,9 @@ class MpesaService {
 
             /**
              * DB HANDSHAKE 2: Sync main transaction status
-             * Updates 'airtime_transactions' table so the user's dashboard changes from PENDING.
+             * UPDATED: Using function style db.airtime_transactions() to match your manager.
              */
-            const { error: transError } = await db.from('airtime_transactions')
+            const { error: transError } = await db.airtime_transactions()
                 .update({ 
                     status: finalStatus,
                     mpesa_receipt: mpesaReceipt,

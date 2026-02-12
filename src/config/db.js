@@ -13,6 +13,10 @@ export const db = {
     provider_logs: () => supabaseAdmin.from(DB_MAPPING.TABLES.PROVIDER_LOGS),
     ledger: () => supabaseAdmin.from(DB_MAPPING.TABLES.FLOAT_LEDGER),
     
+    // ADDED: Mapping for the airtime transactions table
+    // This allows db.airtime_transactions() to work in your MpesaService
+    airtime_transactions: () => supabase.from('airtime_transactions'),
+    
     // This is the one MpesaService uses:
     mpesa_logs: () => supabaseAdmin.from(DB_MAPPING.TABLES.MPESA_LOGS),
     
