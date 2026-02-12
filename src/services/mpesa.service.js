@@ -82,10 +82,9 @@ class MpesaService {
             const { CheckoutRequestID, MerchantRequestID, ResultCode, ResultDesc, CallbackMetadata } = rawData.Body.stkCallback;
             console.log(`📡 PROCESSING CALLBACK: ID ${CheckoutRequestID} | Result: ${ResultCode} (${ResultDesc})`);
 
-            // Define status based on Safaricom ResultCodes
-            // Mapping CANCELLED (1032) to FAILED to satisfy the database Enum constraint
-            let finalStatus = 'FAILED';
-            if (ResultCode === 0) finalStatus = 'SUCCESS';
+            // FIXED: Using lowercase 'failed' and 'success' to match strict DB ENUM constraints
+            let finalStatus = 'failed';
+            if (ResultCode === 0) finalStatus = 'success';
 
             let mpesaReceipt = null;
             // Extract Receipt Number only on success
@@ -118,7 +117,7 @@ class MpesaService {
 
             /**
              * DB HANDSHAKE 2: Sync main transaction status
-             * Updates 'airtime_transactions' using values accepted by the DB Enum (SUCCESS/FAILED).
+             * Updates 'airtime_transactions' using lowercase values for ENUM compatibility.
              */
             const { error: transError } = await db.airtime_transactions()
                 .update({ 
