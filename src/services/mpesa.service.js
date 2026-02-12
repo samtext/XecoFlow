@@ -82,9 +82,10 @@ class MpesaService {
             const { CheckoutRequestID, MerchantRequestID, ResultCode, ResultDesc, CallbackMetadata } = rawData.Body.stkCallback;
             console.log(`📡 PROCESSING CALLBACK: ID ${CheckoutRequestID} | Result: ${ResultCode} (${ResultDesc})`);
 
-            // FIXED: Using lowercase 'failed' and 'success' to match strict DB ENUM constraints
-            let finalStatus = 'failed';
-            if (ResultCode === 0) finalStatus = 'success';
+            // UPDATED: Using exact strings from your SQL ENUM 'transaction_status'
+            // This prevents the "invalid input value" error in airtime_transactions
+            let finalStatus = 'PAYMENT_FAILED';
+            if (ResultCode === 0) finalStatus = 'PAYMENT_SUCCESS';
 
             let mpesaReceipt = null;
             // Extract Receipt Number only on success
@@ -117,7 +118,7 @@ class MpesaService {
 
             /**
              * DB HANDSHAKE 2: Sync main transaction status
-             * Updates 'airtime_transactions' using lowercase values for ENUM compatibility.
+             * Now using 'PAYMENT_FAILED' or 'PAYMENT_SUCCESS' to match your DB schema.
              */
             const { error: transError } = await db.airtime_transactions()
                 .update({ 
