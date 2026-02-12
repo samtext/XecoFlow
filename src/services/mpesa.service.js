@@ -83,9 +83,9 @@ class MpesaService {
             console.log(`📡 PROCESSING CALLBACK: ID ${CheckoutRequestID} | Result: ${ResultCode} (${ResultDesc})`);
 
             // Define status based on Safaricom ResultCodes
-            let finalStatus = 'PAYMENT_FAILED';
-            if (ResultCode === 0) finalStatus = 'PAYMENT_SUCCESS';
-            if (ResultCode === 1032) finalStatus = 'CANCELLED';
+            // Mapping CANCELLED (1032) to FAILED to satisfy the database Enum constraint
+            let finalStatus = 'FAILED';
+            if (ResultCode === 0) finalStatus = 'SUCCESS';
 
             let mpesaReceipt = null;
             // Extract Receipt Number only on success
@@ -118,7 +118,7 @@ class MpesaService {
 
             /**
              * DB HANDSHAKE 2: Sync main transaction status
-             * UPDATED: Using function style db.airtime_transactions() to match your manager.
+             * Updates 'airtime_transactions' using values accepted by the DB Enum (SUCCESS/FAILED).
              */
             const { error: transError } = await db.airtime_transactions()
                 .update({ 
