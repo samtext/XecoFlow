@@ -4,23 +4,16 @@ import { db } from '../config/db.js';
 import { TX_STATES, MPESA_STATUS_CODES } from '../config/systemRules.js';
 
 class MpesaService {
-    /**
-     * AUTHENTICATION: Get Access Token
-     */
     async getAccessToken() {
         try {
             const auth = mpesaConfig.getBasicAuthToken();
             const url = `${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`;
-            
-            console.log(`🔑 AUTH ATTEMPT: ${url}`);
-            
             const response = await axios.get(url, { 
                 headers: { 
                     Authorization: `Basic ${auth}`,
                     "Content-Type": "application/json" 
                 } 
             });
-            
             return response.data.access_token;
         } catch (error) {
             console.error("❌ MPESA_AUTH_ERROR_DETAIL:", error.response?.data || error.message);
@@ -28,17 +21,11 @@ class MpesaService {
         }
     }
 
-    /**
-     * 🚀 BRIDGE METHOD
-     */
     async initiateSTKPush(phoneNumber, amount) {
         const accountReference = `XECO${Math.floor(1000 + Math.random() * 9000)}`;
         return await this.sendStkPush(phoneNumber, amount, accountReference);
     }
 
-    /**
-     * INITIATE STK PUSH (Core Logic)
-     */
     async sendStkPush(phoneNumber, amount, accountReference, token) {
         try {
             const accessToken = token || await this.getAccessToken();
@@ -89,17 +76,14 @@ class MpesaService {
         }
     }
 
-    /**
-     * HANDLE CALLBACK FROM SAFARICOM
-     */
     async handleCallback(rawData, ipAddress = '0.0.0.0') {
         try {
             let finalStatus = TX_STATES.PAYMENT_FAILED;
             let mpesaReceipt = null;
             let checkoutId = null;
+            let merchantId = null;
             let resultDesc = "Processed";
             let resultCode = 0;
-            let merchantId = null;
 
             if (rawData?.Body?.stkCallback) {
                 const cb = rawData.Body.stkCallback;
@@ -117,7 +101,7 @@ class MpesaService {
 
             console.log(`📡 CALLBACK: ID ${checkoutId} | Status: ${finalStatus}`);
 
-            // 1. LOG TO DB (Always works because it's an insert)
+            // 1. LOG TO DB (This always works)
             await db.mpesa_logs().insert([{ 
                 checkout_request_id: checkoutId || 'UNKNOWN',
                 merchant_request_id: merchantId,
@@ -127,7 +111,7 @@ class MpesaService {
                 metadata: { mpesa_receipt: mpesaReceipt, result_desc: resultDesc, result_code: resultCode }
             }]);
 
-            // 2. UPDATE TRANSACTION (FIX: Avoid .single() coercion error)
+            // 2. SAFE UPDATE (REMOVED .single() TO STOP THE CRASH)
             if (checkoutId) {
                 const { data, error } = await db.airtime_transactions()
                     .update({ 
@@ -136,13 +120,14 @@ class MpesaService {
                         updated_at: new Date().toISOString()
                     })
                     .eq('checkout_id', checkoutId)
-                    .select(); // Returns array, won't crash if 0 rows found
+                    .select(); // .select() returns an array [obj], not a single object. No more coercion errors.
 
-                if (error) throw error;
-                
-                if (!data || data.length === 0) {
-                    console.warn(`⚠️ Race Condition: CheckoutID ${checkoutId} not found yet. Retrying in 2s...`);
-                    // Optional: Add a small sleep and retry logic here if needed
+                if (error) {
+                    console.error("❌ DB_UPDATE_FAIL:", error.message);
+                } else if (!data || data.length === 0) {
+                    console.warn(`⚠️ Race Condition: CheckoutID ${checkoutId} not found yet. The callback arrived before the initial insert finished.`);
+                } else {
+                    console.log(`✅ DB_UPDATED: Transaction ${checkoutId} is now ${finalStatus}`);
                 }
             }
 
