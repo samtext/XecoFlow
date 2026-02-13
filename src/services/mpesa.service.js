@@ -6,22 +6,24 @@ import { TX_STATES, MPESA_STATUS_CODES } from '../config/systemRules.js';
 class MpesaService {
     /**
      * AUTHENTICATION: Get Access Token
-     * Improved logging to catch credential mismatches
      */
     async getAccessToken() {
         try {
             const auth = mpesaConfig.getBasicAuthToken();
             const url = `${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`;
             
-            console.log(`🔑 ATTEMPTING AUTH AT: ${url}`);
+            console.log(`🔑 AUTH ATTEMPT: ${url}`);
             
             const response = await axios.get(url, { 
-                headers: { Authorization: `Basic ${auth}` } 
+                headers: { 
+                    Authorization: `Basic ${auth}`,
+                    "Content-Type": "application/json" 
+                } 
             });
             
             return response.data.access_token;
         } catch (error) {
-            // This logs the specific reason Safaricom is rejecting your keys
+            // Logs the exact rejection reason from Safaricom (e.g., 404.001.03)
             console.error("❌ MPESA_AUTH_ERROR_DETAIL:", error.response?.data || error.message);
             throw new Error(`M-Pesa Auth Failed: ${error.response?.data?.errorMessage || error.message}`);
         }
@@ -44,11 +46,17 @@ class MpesaService {
             const timestamp = getMpesaTimestamp();
             const password = generateSTKPassword(timestamp);
 
+            // TILL NUMBER LOGIC: Since you use Till 4938110, we use 'CustomerBuyGoodsOnline'
+            // If shortCode 7450249 is a Paybill, use 'CustomerPayBillOnline'
+            const transactionType = mpesaConfig.shortCode.length > 6 
+                ? "CustomerBuyGoodsOnline" 
+                : "CustomerPayBillOnline";
+
             const payload = {
                 BusinessShortCode: mpesaConfig.shortCode, 
                 Password: password,
                 Timestamp: timestamp,
-                TransactionType: "CustomerBuyGoodsOnline", // Ensure this matches your Shortcode type
+                TransactionType: transactionType, 
                 Amount: Math.round(amount),
                 PartyA: phoneNumber,
                 PartyB: mpesaConfig.shortCode, 
@@ -59,7 +67,7 @@ class MpesaService {
             };
 
             const response = await axios.post(
-                `${mpesaConfig.baseUrl}/mpesa/stkpush/v1/processrequest`,
+                `${mpesaConfig.baseUrl}${mpesaConfig.stkPushEndpoint}`,
                 payload,
                 { headers: { Authorization: `Bearer ${accessToken}` } }
             );
@@ -108,18 +116,12 @@ class MpesaService {
 
                 if (String(resultCode) === MPESA_STATUS_CODES.MPESA_SUCCESS_CODE) {
                     finalStatus = TX_STATES.PAYMENT_SUCCESS;
-                    const receiptItem = cb.CallbackMetadata?.Item?.find(i => i.Name === 'MpesaReceiptNumber');
-                    mpesaReceipt = receiptItem ? receiptItem.Value : null;
+                    const meta = cb.CallbackMetadata?.Item;
+                    mpesaReceipt = meta?.find(i => i.Name === 'MpesaReceiptNumber')?.Value || null;
                 }
             } 
-            else if (rawData?.TransID) {
-                mpesaReceipt = rawData.TransID;
-                resultDesc = "C2B Confirmation Received";
-                finalStatus = TX_STATES.PAYMENT_SUCCESS;
-                checkoutId = rawData.BillRefNumber; 
-            }
 
-            console.log(`📡 CALLBACK PROCESSED: ID ${checkoutId} | Status: ${finalStatus}`);
+            console.log(`📡 CALLBACK: ID ${checkoutId} | Status: ${finalStatus} | Code: ${resultCode}`);
 
             // LOG TO DB
             await db.mpesa_logs().insert([{ 
