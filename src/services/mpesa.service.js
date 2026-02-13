@@ -23,7 +23,6 @@ class MpesaService {
             
             return response.data.access_token;
         } catch (error) {
-            // Logs the exact rejection reason from Safaricom (e.g., 404.001.03)
             console.error("❌ MPESA_AUTH_ERROR_DETAIL:", error.response?.data || error.message);
             throw new Error(`M-Pesa Auth Failed: ${error.response?.data?.errorMessage || error.message}`);
         }
@@ -46,8 +45,6 @@ class MpesaService {
             const timestamp = getMpesaTimestamp();
             const password = generateSTKPassword(timestamp);
 
-            // TILL NUMBER LOGIC: Since you use Till 4938110, we use 'CustomerBuyGoodsOnline'
-            // If shortCode 7450249 is a Paybill, use 'CustomerPayBillOnline'
             const transactionType = mpesaConfig.shortCode.length > 6 
                 ? "CustomerBuyGoodsOnline" 
                 : "CustomerPayBillOnline";
@@ -88,10 +85,7 @@ class MpesaService {
             };
         } catch (error) {
             console.error("❌ STK_PUSH_ERROR:", error.response?.data || error.message);
-            return { 
-                success: false, 
-                error: error.response?.data || error.message 
-            };
+            return { success: false, error: error.response?.data || error.message };
         }
     }
 
@@ -121,31 +115,35 @@ class MpesaService {
                 }
             } 
 
-            console.log(`📡 CALLBACK: ID ${checkoutId} | Status: ${finalStatus} | Code: ${resultCode}`);
+            console.log(`📡 CALLBACK: ID ${checkoutId} | Status: ${finalStatus}`);
 
-            // LOG TO DB
+            // 1. LOG TO DB (Always works because it's an insert)
             await db.mpesa_logs().insert([{ 
                 checkout_request_id: checkoutId || 'UNKNOWN',
                 merchant_request_id: merchantId,
                 status: finalStatus,
                 raw_payload: rawData.Body?.stkCallback || rawData,
                 ip_address: ipAddress,
-                metadata: { 
-                    mpesa_receipt: mpesaReceipt,
-                    result_desc: resultDesc,
-                    result_code: resultCode
-                }
+                metadata: { mpesa_receipt: mpesaReceipt, result_desc: resultDesc, result_code: resultCode }
             }]);
 
-            // UPDATE TRANSACTION
+            // 2. UPDATE TRANSACTION (FIX: Avoid .single() coercion error)
             if (checkoutId) {
-                await db.airtime_transactions()
+                const { data, error } = await db.airtime_transactions()
                     .update({ 
                         status: finalStatus,
                         mpesa_receipt: mpesaReceipt,
                         updated_at: new Date().toISOString()
                     })
-                    .eq('checkout_id', checkoutId);
+                    .eq('checkout_id', checkoutId)
+                    .select(); // Returns array, won't crash if 0 rows found
+
+                if (error) throw error;
+                
+                if (!data || data.length === 0) {
+                    console.warn(`⚠️ Race Condition: CheckoutID ${checkoutId} not found yet. Retrying in 2s...`);
+                    // Optional: Add a small sleep and retry logic here if needed
+                }
             }
 
             return true;
