@@ -1,26 +1,72 @@
 import express from 'express';
 import mpesaService from '../services/mpesa.service.js';
+import { db } from '../config/db.js'; // Ensure DB is imported for status checks
 
 const router = express.Router();
 
 /**
- * MPESA CALLBACK ROUTE
- * Handshake endpoint for Safaricom to report transaction results.
+ * 1. INITIATE STK PUSH
+ * Path: /api/v1/stkpush
+ */
+router.post('/stkpush', async (req, res) => {
+    try {
+        const { phoneNumber, amount } = req.body;
+        
+        if (!phoneNumber || !amount) {
+            return res.status(400).json({ error: "Phone number and amount are required" });
+        }
+
+        console.log(`🚀 INITIATING STK PUSH FOR: ${phoneNumber} Amount: ${amount}`);
+        
+        const response = await mpesaService.initiateSTKPush(phoneNumber, amount);
+        
+        return res.status(200).json(response);
+    } catch (error) {
+        console.error("❌ STK_PUSH_ROUTE_ERROR:", error.message);
+        return res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * 2. TRANSACTION STATUS CHECK
+ * New Endpoint for Frontend Polling
+ * Path: /api/v1/status/:checkoutRequestId
+ */
+router.get('/status/:checkoutRequestId', async (req, res) => {
+    try {
+        const { checkoutRequestId } = req.params;
+
+        // Query your database for the current status of this transaction
+        const { data, error } = await db.airtime_transactions()
+            .select('status, mpesa_receipt')
+            .eq('checkout_id', checkoutRequestId)
+            .single();
+
+        if (error) throw error;
+
+        return res.status(200).json({
+            success: true,
+            status: data?.status || 'PENDING',
+            receipt: data?.mpesa_receipt
+        });
+    } catch (error) {
+        console.error("❌ STATUS_CHECK_ERROR:", error.message);
+        return res.status(500).json({ error: "Could not fetch status" });
+    }
+});
+
+/**
+ * 3. MPESA CALLBACK ROUTE
  * Path: /api/v1/payments/callback
  */
 router.post('/payments/callback', async (req, res) => {
     try {
         console.log("📥 MPESA CALLBACK RECEIVED!");
 
-        // --- NEW: IP EXTRACTION ---
-        // Grabs the real client IP behind Render's proxy
         const ipAddress = req.headers['x-forwarded-for']?.split(',')[0] || 
                          req.socket.remoteAddress || 
                          '0.0.0.0';
 
-        // --- NEW: C2B VALIDATION HANDLER ---
-        // Manual "Lipa na M-Pesa" payments send a Validation request first.
-        // If it's a Validation request (has TransactionType but no TransID), we accept it.
         if (req.body.TransactionType && !req.body.TransID) {
             console.log("🛡️ VALIDATION REQUEST: Accepted for IP:", ipAddress);
             return res.status(200).json({
@@ -29,9 +75,6 @@ router.post('/payments/callback', async (req, res) => {
             });
         }
 
-        // 1. Immediate Validation (Original Logic Kept)
-        // Note: For Manual C2B, the structure is slightly different than STK.
-        // We only enforce this for STK push responses.
         const isStk = req.body?.Body?.stkCallback;
         const isC2B = req.body?.TransID;
 
@@ -43,18 +86,11 @@ router.post('/payments/callback', async (req, res) => {
             });
         }
 
-        /**
-         * 2. Send acknowledgment to Safaricom (Original Logic Kept)
-         */
         res.status(200).json({
             ResultCode: 0,
             ResultDesc: "Success"
         });
 
-        /**
-         * 3. Process DB logic in the background (Original Logic Updated with IP)
-         * Now passing 'ipAddress' as the second argument to fix your empty DB column.
-         */
         mpesaService.handleCallback(req.body, ipAddress).catch(err => {
             console.error("❌ Background DB Process Error:", err.message);
         });

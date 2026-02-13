@@ -5,15 +5,15 @@
   "main": "src/server.js",
   "type": "module",
   "scripts": {
-  "start": "node src/server.js",
-  "dev": "nodemon src/server.js"
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
   },
   "author": "Samtext-Tel:0712071385",
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
     "axios": "^1.6.0",
-    "cors": "^2.8.5",
+    "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.18.2",
     "mysql2": "^3.6.1",

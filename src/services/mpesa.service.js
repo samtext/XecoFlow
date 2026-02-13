@@ -6,7 +6,6 @@ import { TX_STATES, MPESA_STATUS_CODES } from '../config/systemRules.js';
 class MpesaService {
     /**
      * AUTHENTICATION: Get Access Token
-     * Dynamically pulls from production/sandbox based on your config.
      */
     async getAccessToken() {
         try {
@@ -23,7 +22,17 @@ class MpesaService {
     }
 
     /**
-     * INITIATE STK PUSH
+     * 🚀 NEW: BRIDGE METHOD FOR THE ROUTE
+     * This simplifies the call from mpesa.routes.js
+     */
+    async initiateSTKPush(phoneNumber, amount) {
+        // Generate a unique reference (e.g., XECO-12345)
+        const accountReference = `XECO${Math.floor(1000 + Math.random() * 9000)}`;
+        return await this.sendStkPush(phoneNumber, amount, accountReference);
+    }
+
+    /**
+     * INITIATE STK PUSH (Core Logic)
      */
     async sendStkPush(phoneNumber, amount, accountReference, token) {
         try {
@@ -35,7 +44,7 @@ class MpesaService {
                 BusinessShortCode: mpesaConfig.shortCode, 
                 Password: password,
                 Timestamp: timestamp,
-                TransactionType: "CustomerBuyGoodsOnline", 
+                TransactionType: "CustomerBuyGoodsOnline", // Change to "CustomerPayBillOnline" if using Paybill
                 Amount: Math.round(amount),
                 PartyA: phoneNumber,
                 PartyB: process.env.MPESA_BUSINESS_TILL || mpesaConfig.shortCode, 
@@ -51,6 +60,15 @@ class MpesaService {
                 { headers: { Authorization: `Bearer ${accessToken}` } }
             );
 
+            // DB HANDSHAKE 0: Create the initial record
+            await db.airtime_transactions().insert([{
+                checkout_id: response.data.CheckoutRequestID,
+                phone: phoneNumber,
+                amount: amount,
+                status: TX_STATES.PENDING,
+                reference: accountReference
+            }]);
+
             return {
                 success: true,
                 checkoutRequestId: response.data.CheckoutRequestID,
@@ -64,7 +82,6 @@ class MpesaService {
 
     /**
      * HANDLE CALLBACK FROM SAFARICOM
-     * Supports both STK Push and Manual C2B (Lipa Na Mpesa)
      */
     async handleCallback(rawData, ipAddress = '0.0.0.0') {
         try {
@@ -75,9 +92,6 @@ class MpesaService {
             let resultCode = 0;
             let merchantId = null;
 
-            // --- 1. DETECT PAYLOAD TYPE ---
-            
-            // TYPE A: STK PUSH (Has .Body object)
             if (rawData?.Body?.stkCallback) {
                 const cb = rawData.Body.stkCallback;
                 checkoutId = cb.CheckoutRequestID;
@@ -91,21 +105,17 @@ class MpesaService {
                     mpesaReceipt = receiptItem ? receiptItem.Value : null;
                 }
             } 
-            // TYPE B: MANUAL C2B (Flat object with TransID)
             else if (rawData?.TransID) {
                 mpesaReceipt = rawData.TransID;
                 resultDesc = "C2B Confirmation Received";
                 finalStatus = TX_STATES.PAYMENT_SUCCESS;
-                // Manual matching: usually uses BillRefNumber or MSISDN
                 checkoutId = rawData.BillRefNumber; 
             }
 
             console.log(`📡 PROCESSING: ID ${checkoutId} | Receipt: ${mpesaReceipt} | Status: ${finalStatus}`);
 
-            /**
-             * DB HANDSHAKE 1: Record Evidence
-             */
-            const { error: logError } = await db.mpesa_logs().insert([{ 
+            // DB LOGGING
+            await db.mpesa_logs().insert([{ 
                 checkout_request_id: checkoutId || 'UNKNOWN',
                 merchant_request_id: merchantId,
                 status: finalStatus,
@@ -119,21 +129,15 @@ class MpesaService {
                 }
             }]);
 
-            if (logError) console.error("📑 DB LOG INSERT ERROR:", logError.message);
-
-            /**
-             * DB HANDSHAKE 2: Sync main transaction status
-             */
+            // UPDATE TRANSACTION STATUS
             if (checkoutId) {
-                const { error: transError } = await db.airtime_transactions()
+                await db.airtime_transactions()
                     .update({ 
                         status: finalStatus,
                         mpesa_receipt: mpesaReceipt,
                         updated_at: new Date().toISOString()
                     })
                     .eq('checkout_id', checkoutId);
-
-                if (transError) console.error("📑 TRANS UPDATE ERROR:", transError.message);
             }
 
             return true;

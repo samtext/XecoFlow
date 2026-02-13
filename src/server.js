@@ -1,10 +1,12 @@
 import 'dotenv/config'; 
 import express from 'express';
+import cors from 'cors'; // Added this
 import mpesaRoutes from './routes/mpesa.routes.js';
 
 const app = express();
 
 // Middleware: MUST be before routes
+app.use(cors()); // Added to allow your frontend to connect
 app.use(express.json());
 
 // Health Check - Used by Render to see if your app is alive
