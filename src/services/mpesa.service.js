@@ -6,27 +6,31 @@ import { TX_STATES, MPESA_STATUS_CODES } from '../config/systemRules.js';
 class MpesaService {
     /**
      * AUTHENTICATION: Get Access Token
+     * Improved logging to catch credential mismatches
      */
     async getAccessToken() {
         try {
             const auth = mpesaConfig.getBasicAuthToken();
-            const response = await axios.get(
-                `${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`,
-                { headers: { Authorization: `Basic ${auth}` } }
-            );
+            const url = `${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`;
+            
+            console.log(`🔑 ATTEMPTING AUTH AT: ${url}`);
+            
+            const response = await axios.get(url, { 
+                headers: { Authorization: `Basic ${auth}` } 
+            });
+            
             return response.data.access_token;
         } catch (error) {
-            console.error("❌ MPESA_AUTH_ERROR:", error.response?.data || error.message);
-            throw new Error("Failed to generate M-Pesa access token.");
+            // This logs the specific reason Safaricom is rejecting your keys
+            console.error("❌ MPESA_AUTH_ERROR_DETAIL:", error.response?.data || error.message);
+            throw new Error(`M-Pesa Auth Failed: ${error.response?.data?.errorMessage || error.message}`);
         }
     }
 
     /**
-     * 🚀 NEW: BRIDGE METHOD FOR THE ROUTE
-     * This simplifies the call from mpesa.routes.js
+     * 🚀 BRIDGE METHOD
      */
     async initiateSTKPush(phoneNumber, amount) {
-        // Generate a unique reference (e.g., XECO-12345)
         const accountReference = `XECO${Math.floor(1000 + Math.random() * 9000)}`;
         return await this.sendStkPush(phoneNumber, amount, accountReference);
     }
@@ -44,10 +48,10 @@ class MpesaService {
                 BusinessShortCode: mpesaConfig.shortCode, 
                 Password: password,
                 Timestamp: timestamp,
-                TransactionType: "CustomerBuyGoodsOnline", // Change to "CustomerPayBillOnline" if using Paybill
+                TransactionType: "CustomerBuyGoodsOnline", // Ensure this matches your Shortcode type
                 Amount: Math.round(amount),
                 PartyA: phoneNumber,
-                PartyB: process.env.MPESA_BUSINESS_TILL || mpesaConfig.shortCode, 
+                PartyB: mpesaConfig.shortCode, 
                 PhoneNumber: phoneNumber,
                 CallBackURL: mpesaConfig.callbackUrl,
                 AccountReference: accountReference.replace(/\s/g, '').substring(0, 12), 
@@ -60,7 +64,7 @@ class MpesaService {
                 { headers: { Authorization: `Bearer ${accessToken}` } }
             );
 
-            // DB HANDSHAKE 0: Create the initial record
+            // DB HANDSHAKE
             await db.airtime_transactions().insert([{
                 checkout_id: response.data.CheckoutRequestID,
                 phone: phoneNumber,
@@ -76,7 +80,10 @@ class MpesaService {
             };
         } catch (error) {
             console.error("❌ STK_PUSH_ERROR:", error.response?.data || error.message);
-            return { success: false, error: error.response?.data || error.message };
+            return { 
+                success: false, 
+                error: error.response?.data || error.message 
+            };
         }
     }
 
@@ -112,9 +119,9 @@ class MpesaService {
                 checkoutId = rawData.BillRefNumber; 
             }
 
-            console.log(`📡 PROCESSING: ID ${checkoutId} | Receipt: ${mpesaReceipt} | Status: ${finalStatus}`);
+            console.log(`📡 CALLBACK PROCESSED: ID ${checkoutId} | Status: ${finalStatus}`);
 
-            // DB LOGGING
+            // LOG TO DB
             await db.mpesa_logs().insert([{ 
                 checkout_request_id: checkoutId || 'UNKNOWN',
                 merchant_request_id: merchantId,
@@ -123,13 +130,12 @@ class MpesaService {
                 ip_address: ipAddress,
                 metadata: { 
                     mpesa_receipt: mpesaReceipt,
-                    processed_at: new Date().toISOString(),
                     result_desc: resultDesc,
                     result_code: resultCode
                 }
             }]);
 
-            // UPDATE TRANSACTION STATUS
+            // UPDATE TRANSACTION
             if (checkoutId) {
                 await db.airtime_transactions()
                     .update({ 

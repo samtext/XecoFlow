@@ -5,7 +5,7 @@ import dbService from './src/services/dbServices.js';
 
 async function runIntegratedTest() {
     // Test Config
-    const testPhone = "254712071385"; 
+    const testPhone = "254708050827"; 
     const testAmount = 900; 
     const activeUserUid = "e4ed507f-753b-4f80-917b-8b03f9c8726c"; 
 
