@@ -108,11 +108,43 @@ class MpesaService {
                 status: finalStatus,
                 raw_payload: rawData.Body?.stkCallback || rawData,
                 ip_address: ipAddress,
-                metadata: { mpesa_receipt: mpesaReceipt, result_desc: resultDesc, result_code: resultCode }
+                metadata: { 
+                    mpesa_receipt: mpesaReceipt, 
+                    result_desc: resultDesc, 
+                    result_code: resultCode 
+                }
             }]);
 
             // 2. SAFE UPDATE (REMOVED .single() TO STOP THE CRASH)
             if (checkoutId) {
+                // First, check if transaction exists
+                const { data: existingData, error: checkError } = await db.airtime_transactions()
+                    .select('*')
+                    .eq('checkout_id', checkoutId);
+
+                if (checkError) {
+                    console.error("❌ DB_CHECK_FAIL:", checkError.message);
+                    return false;
+                }
+
+                // If transaction doesn't exist, log warning but don't crash
+                if (!existingData || existingData.length === 0) {
+                    console.warn(`⚠️ Race Condition: CheckoutID ${checkoutId} not found yet. The callback arrived before the initial insert finished.`);
+                    
+                    // Optional: Insert a record if it doesn't exist (fallback)
+                    await db.airtime_transactions().insert([{
+                        checkout_id: checkoutId,
+                        status: finalStatus,
+                        mpesa_receipt: mpesaReceipt,
+                        updated_at: new Date().toISOString(),
+                        created_at: new Date().toISOString()
+                    }]);
+                    
+                    console.log(`✅ DB_INSERTED: New transaction ${checkoutId} created from callback`);
+                    return true;
+                }
+
+                // Update existing transaction
                 const { data, error } = await db.airtime_transactions()
                     .update({ 
                         status: finalStatus,
@@ -120,12 +152,10 @@ class MpesaService {
                         updated_at: new Date().toISOString()
                     })
                     .eq('checkout_id', checkoutId)
-                    .select(); // .select() returns an array [obj], not a single object. No more coercion errors.
+                    .select();
 
                 if (error) {
                     console.error("❌ DB_UPDATE_FAIL:", error.message);
-                } else if (!data || data.length === 0) {
-                    console.warn(`⚠️ Race Condition: CheckoutID ${checkoutId} not found yet. The callback arrived before the initial insert finished.`);
                 } else {
                     console.log(`✅ DB_UPDATED: Transaction ${checkoutId} is now ${finalStatus}`);
                 }

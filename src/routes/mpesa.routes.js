@@ -39,19 +39,31 @@ router.get('/status/:checkoutRequestId', async (req, res) => {
         // Query your database for the current status of this transaction
         const { data, error } = await db.airtime_transactions()
             .select('status, mpesa_receipt')
-            .eq('checkout_id', checkoutRequestId)
-            .single();
+            .eq('checkout_id', checkoutRequestId);
 
         if (error) throw error;
 
+        // Check if transaction exists
+        if (!data || data.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: "Transaction not found" 
+            });
+        }
+
+        // Return the most recent transaction status
         return res.status(200).json({
             success: true,
-            status: data?.status || 'PENDING',
-            receipt: data?.mpesa_receipt
+            status: data[0]?.status || 'PENDING',
+            receipt: data[0]?.mpesa_receipt
         });
+
     } catch (error) {
         console.error("❌ STATUS_CHECK_ERROR:", error.message);
-        return res.status(500).json({ error: "Could not fetch status" });
+        return res.status(500).json({ 
+            success: false,
+            error: "Could not fetch status" 
+        });
     }
 });
 
