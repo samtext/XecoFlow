@@ -8,13 +8,10 @@ class MpesaService {
             const auth = mpesaConfig.getBasicAuthToken();
             const url = `${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`;
             
-            console.log("🔑 Getting access token...");
-            
             const response = await axios.get(url, { 
                 headers: { Authorization: `Basic ${auth}` } 
             });
             
-            console.log("✅ Access token obtained");
             return response.data.access_token;
         } catch (error) {
             console.error("❌ Auth Error:", error.response?.data || error.message);
@@ -24,18 +21,10 @@ class MpesaService {
 
     async initiateSTKPush(phoneNumber, amount) {
         try {
-            console.log(`🚀 Initiating Buy Goods STK Push for ${phoneNumber} - KES ${amount}`);
-            
             const accessToken = await this.getAccessToken();
             const timestamp = getMpesaTimestamp();
-            
-            /**
-             * 🛡️ SECURE CONFIGURATION:
-             * BusinessShortCode = The Parent/HQ code (mapped in .env as 7450249)
-             * PartyB = The actual Till (mapped in .env as 4938110)
-             * Password = Hashed using the HQ code for production handshake
-             */
             const password = generateSTKPassword(timestamp);
+            const accountRef = `XECO${Date.now()}`.substring(0, 12);
 
             const payload = {
                 BusinessShortCode: mpesaConfig.shortCode, 
@@ -47,11 +36,9 @@ class MpesaService {
                 PartyB: mpesaConfig.till, 
                 PhoneNumber: phoneNumber,
                 CallBackURL: mpesaConfig.callbackUrl,
-                AccountReference: `XECO${Date.now()}`.substring(0, 12),
+                AccountReference: accountRef,
                 TransactionDesc: "Payment for goods"
             };
-
-            console.log(`📦 Payload: Routing through HQ ${payload.BusinessShortCode} to Till ${payload.PartyB}`);
 
             const response = await axios.post(
                 `${mpesaConfig.baseUrl}${mpesaConfig.stkPushEndpoint}`,
@@ -60,70 +47,80 @@ class MpesaService {
             );
 
             if (response.data.ResponseCode === "0") {
-                // Using .select() to avoid the "coerce to single object" error if multiple rows exist
-                await db.airtime_transactions().insert([{
+                // Ensure the database INSERT is awaited so the record exists for the callback
+                const { error: insertError } = await db.airtime_transactions().insert([{
                     checkout_id: response.data.CheckoutRequestID,
                     phone: phoneNumber,
                     amount: amount,
                     status: 'PENDING',
-                    reference: payload.AccountReference,
+                    reference: accountRef,
                     transaction_type: 'BUY_GOODS'
-                }]).select();
-                
-                console.log(`✅ STK Push sent! Checkout ID: ${response.data.CheckoutRequestID}`);
+                }]);
+
+                if (insertError) {
+                    console.error("❌ DB Insert Error:", insertError.message);
+                } else {
+                    console.log(`✅ STK Pushed & Saved: ${response.data.CheckoutRequestID}`);
+                }
             }
 
-            return {
-                success: response.data.ResponseCode === "0",
-                checkoutRequestId: response.data.CheckoutRequestID,
-                data: response.data
-            };
+            return { success: true, checkoutRequestId: response.data.CheckoutRequestID };
         } catch (error) {
-            console.error("❌ STK Push Error:", error.response?.data || error.message);
-            return { 
-                success: false, 
-                error: error.response?.data?.errorMessage || error.message 
-            };
+            console.error("❌ STK Initiation Error:", error.message);
+            return { success: false, error: error.message };
         }
     }
 
     async handleCallback(rawData) {
         try {
-            if (!rawData?.Body?.stkCallback) {
-                console.warn("⚠️ Invalid callback format received");
-                return false;
-            }
+            console.log("📥 MPESA CALLBACK RECEIVED!");
+            if (!rawData?.Body?.stkCallback) return false;
 
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
             const status = String(cb.ResultCode) === "0" ? 'COMPLETED' : 'FAILED';
             
-            console.log(`📥 Callback received for ${checkoutId}: Status ${status}`);
+            console.log(`🔄 Callback ID: ${checkoutId} | Status: ${status}`);
 
             if (checkoutId) {
-                // 🕒 Race Condition Fix: Wait 2 seconds to ensure the 'PENDING' record 
-                // from initiateSTKPush is fully saved in Supabase before we try to update it.
-                await new Promise(resolve => setTimeout(resolve, 2000));
-
+                // TRY 1: Immediate Update
                 const { data, error } = await db.airtime_transactions()
                     .update({ 
-                        status, 
+                        status: status, 
                         updated_at: new Date().toISOString() 
                     })
                     .eq('checkout_id', checkoutId)
-                    .select(); // .select() ensures we get the row back to verify it updated
+                    .select();
 
-                if (error) throw error;
-
-                if (!data || data.length === 0) {
-                    console.error(`❌ DB Update Failed: No record found for ID ${checkoutId}`);
+                // TRY 2: If row wasn't found (Race Condition), wait 3s and retry
+                if (!error && (!data || data.length === 0)) {
+                    console.log("🕒 Record not found yet, retrying in 3 seconds...");
+                    await new Promise(res => setTimeout(res, 3000));
+                    
+                    const { data: retryData, error: retryError } = await db.airtime_transactions()
+                        .update({ 
+                            status: status, 
+                            updated_at: new Date().toISOString() 
+                        })
+                        .eq('checkout_id', checkoutId)
+                        .select();
+                    
+                    if (retryError) throw retryError;
+                    
+                    if (retryData && retryData.length > 0) {
+                        console.log(`💾 DB Updated on Retry: ${checkoutId} is now ${status}`);
+                    } else {
+                        console.error(`❌ DB Update Failed: No record found for ID ${checkoutId} even after retry.`);
+                    }
+                } else if (error) {
+                    throw error;
                 } else {
                     console.log(`💾 DB Updated: ${checkoutId} is now ${status}`);
                 }
             }
             return true;
         } catch (e) {
-            console.error("❌ Callback Processing Error:", e.message);
+            console.error("❌ DB Callback Update Error:", e.message);
             return false;
         }
     }
