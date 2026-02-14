@@ -1,42 +1,24 @@
 import 'dotenv/config';
-import mpesaAuth from './src/services/mpesa_auth.js';
 import mpesaService from './src/services/mpesa.service.js';
-import dbService from './src/services/dbServices.js';
 
 async function runIntegratedTest() {
-    // Test Config
+    // Test phone and amount
     const testPhone = "254708050827"; 
     const testAmount = 900; 
-    const activeUserUid = "e4ed507f-753b-4f80-917b-8b03f9c8726c"; 
 
     try {
-        console.log("🚀 STARTING INTEGRATED RECEIVING TEST...");
+        console.log("🚀 STARTING MPESA TEST...");
 
-        // 1. Create DB Record - Passing the UID as required by system rules
-        const transaction = await dbService.createTransactionRecord(
-            testPhone, 
-            testAmount, 
-            activeUserUid
-        );
-
-        // 2. Get Safaricom Token
-        const token = await mpesaAuth.getAccessToken();
-
-        // 3. Trigger STK Push
-        console.log(`📡 Sending STK Push for Internal ID: ${transaction.id}...`);
-        const result = await mpesaService.sendStkPush(
-            testPhone, 
-            testAmount, 
-            `ID-${transaction.id}`, 
-            token
-        );
+        // Trigger STK Push
+        console.log(`📡 Sending STK Push to ${testPhone} for KES ${testAmount}...`);
+        
+        const result = await mpesaService.initiateSTKPush(testPhone, testAmount);
 
         if (result.success) {
-            // 4. Link Safaricom ID to DB
-            await dbService.linkCheckoutId(transaction.id, result.checkoutRequestId);
-            
-            console.log("\n✅ SUCCESS: Check your phone for the PIN prompt!");
-            console.log("📡 Monitor your server terminal for the Callback result.");
+            console.log("\n✅ STK Push sent successfully!");
+            console.log("📱 Check your phone for the M-Pesa PIN prompt");
+            console.log(`📋 Checkout Request ID: ${result.checkoutRequestId}`);
+            console.log("\n📡 Waiting for callback response...");
         } else {
             console.error("\n❌ MPESA ERROR:", result.error);
         }
