@@ -96,23 +96,30 @@ class MpesaService {
 
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
-            // Map ResultCode 0 to COMPLETED, otherwise FAILED
             const status = String(cb.ResultCode) === "0" ? 'COMPLETED' : 'FAILED';
             
             console.log(`📥 Callback received for ${checkoutId}: Status ${status}`);
 
             if (checkoutId) {
-                // Update the transaction. No .single() used here to prevent coercion errors.
-                const { error } = await db.airtime_transactions()
+                // 🕒 Race Condition Fix: Wait 2 seconds to ensure the 'PENDING' record 
+                // from initiateSTKPush is fully saved in Supabase before we try to update it.
+                await new Promise(resolve => setTimeout(resolve, 2000));
+
+                const { data, error } = await db.airtime_transactions()
                     .update({ 
                         status, 
                         updated_at: new Date().toISOString() 
                     })
                     .eq('checkout_id', checkoutId)
-                    .select();
+                    .select(); // .select() ensures we get the row back to verify it updated
 
                 if (error) throw error;
-                console.log(`💾 DB Updated: ${checkoutId} is now ${status}`);
+
+                if (!data || data.length === 0) {
+                    console.error(`❌ DB Update Failed: No record found for ID ${checkoutId}`);
+                } else {
+                    console.log(`💾 DB Updated: ${checkoutId} is now ${status}`);
+                }
             }
             return true;
         } catch (e) {
