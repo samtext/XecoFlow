@@ -1,7 +1,7 @@
 import axios from 'axios';
 import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/mpesa.js';
 import { db } from '../config/db.js';
-import { v4 as uuidv4 } from 'uuid'; // Ensure you have uuid installed: npm install uuid
+import { v4 as uuidv4 } from 'uuid'; // npm install uuid
 
 class MpesaService {
     async getAccessToken() {
@@ -17,14 +17,12 @@ class MpesaService {
         }
     }
 
-    async initiateSTKPush(phoneNumber, amount, userId) {
+    async initiateSTKPush(phoneNumber, amount, userId = null) {
         try {
             const accessToken = await this.getAccessToken();
             const timestamp = getMpesaTimestamp();
             const password = generateSTKPassword(timestamp);
-            
-            // Your DB requires an idempotency_key (UUID)
-            const iKey = uuidv4();
+            const iKey = uuidv4(); // Generate required idempotency_key
 
             const payload = {
                 BusinessShortCode: mpesaConfig.shortCode, 
@@ -47,21 +45,24 @@ class MpesaService {
             );
 
             if (response.data.ResponseCode === "0") {
-                // FIXED: Mapping to your specific SQL Schema columns
+                // IMPORTANT: If userId is null, we provide a placeholder to satisfy NOT NULL constraint
+                // In production, this must be a real auth.users UUID.
+                const finalUserId = userId || '00000000-0000-0000-0000-000000000000'; 
+
                 const { error: insertError } = await db.airtime_transactions().insert([{
-                    user_id: userId, // Required by your SQL schema
+                    user_id: finalUserId,           // Fixed: Violates not-null
                     amount: amount,
-                    phone_number: phoneNumber, // Matches your SQL 'phone_number'
-                    network: 'SAFARICOM', // Required by your ENUM network_provider
-                    status: 'PENDING_PAYMENT', // Matches your ENUM transaction_status
-                    idempotency_key: iKey, // Required UNIQUE UUID
+                    phone_number: phoneNumber,      // Fixed: Column name mismatch
+                    network: 'SAFARICOM',           // Required ENUM
+                    status: 'PENDING_PAYMENT',      // Fixed: Matches ENUM
+                    idempotency_key: iKey,          // Required UNIQUE UUID
                     checkout_id: response.data.CheckoutRequestID
                 }]);
 
                 if (insertError) {
                     console.error("❌ DB Insert Error:", insertError.message);
                 } else {
-                    console.log(`✅ Record Saved PENDING: ${response.data.CheckoutRequestID}`);
+                    console.log(`✅ Record Saved: ${response.data.CheckoutRequestID}`);
                 }
             }
 
@@ -79,14 +80,12 @@ class MpesaService {
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
             
-            // Mapping M-Pesa result to your SQL ENUM 'transaction_status'
+            // Map to your ENUM: PAYMENT_SUCCESS or PAYMENT_FAILED
             const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
             
-            console.log(`📥 Callback for ${checkoutId}: ${status}`);
-
             if (checkoutId) {
-                // Wait slightly for the insert to propagate
-                await new Promise(res => setTimeout(res, 2000));
+                // Wait for insert to complete
+                await new Promise(res => setTimeout(res, 2500));
 
                 const { data, error } = await db.airtime_transactions()
                     .update({ status: status })
