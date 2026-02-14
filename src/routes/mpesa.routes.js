@@ -10,15 +10,18 @@ const router = express.Router();
  */
 router.post('/stkpush', async (req, res) => {
     try {
-        const { phoneNumber, amount } = req.body;
+        // UPDATED: Destructure userId from req.body to match your MpesaService requirements
+        const { phoneNumber, amount, userId } = req.body;
         
-        if (!phoneNumber || !amount) {
-            return res.status(400).json({ error: "Phone number and amount are required" });
+        // UPDATED: Added userId check to prevent calling the service with missing data
+        if (!phoneNumber || !amount || !userId) {
+            return res.status(400).json({ error: "Phone number, amount, and userId are required" });
         }
 
-        console.log(`🚀 INITIATING STK PUSH FOR: ${phoneNumber} Amount: ${amount}`);
+        console.log(`🚀 INITIATING STK PUSH FOR: ${phoneNumber} Amount: ${amount} User: ${userId}`);
         
-        const response = await mpesaService.initiateSTKPush(phoneNumber, amount);
+        // UPDATED: Added 'userId' as the 3rd argument to satisfy MpesaService.initiateSTKPush(phoneNumber, amount, userId)
+        const response = await mpesaService.initiateSTKPush(phoneNumber, amount, userId);
         
         return res.status(200).json(response);
     } catch (error) {
@@ -61,7 +64,7 @@ router.get('/status/:checkoutRequestId', async (req, res) => {
     } catch (error) {
         console.error("❌ STATUS_CHECK_ERROR:", error.message);
         return res.status(500).json({ 
-            success: false,
+            success: false, 
             error: "Could not fetch status" 
         });
     }
