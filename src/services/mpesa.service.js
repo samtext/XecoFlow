@@ -54,8 +54,8 @@ class MpesaService {
             );
 
             if (response.data.ResponseCode === "0") {
-                // ✅ DB STEP 1: Create the transaction record first
-                const { error: insertError } = await db.from('airtime_transactions').insert([{
+                // ✅ Using your specific db helper syntax to avoid "db.from is not a function"
+                const { error: insertError } = await db.airtime_transactions().insert([{
                     user_id: userId,
                     amount: cleanAmount,
                     phone_number: cleanPhone,
@@ -88,9 +88,8 @@ class MpesaService {
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
             
-            // ✅ DB STEP 2: Log the Raw Callback immediately (Audit Trail)
-            // This is the FIRST table to receive the Safaricom data
-            const { error: logError } = await db.from('mpesa_callback_logs').insert([{
+            // ✅ Log to callback table using your specific helper syntax
+            const { error: logError } = await db.mpesa_callback_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID,
                 raw_payload: rawData,
@@ -100,7 +99,6 @@ class MpesaService {
 
             if (logError) console.error("⚠️ Callback Log Error:", logError.message);
 
-            // ✅ DB STEP 3: Sync the results to airtime_transactions
             const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
             
             let receipt = null;
@@ -110,10 +108,10 @@ class MpesaService {
             }
 
             if (checkoutId) {
-                // Wait briefly for the 'PENDING' insert to finalize in Supabase
+                // Ensure we don't try to update before the record is fully created in Stage 1
                 await new Promise(res => setTimeout(res, 2000));
 
-                const { data, error } = await db.from('airtime_transactions')
+                const { data, error } = await db.airtime_transactions()
                     .update({ 
                         status: status,
                         mpesa_receipt: receipt,
@@ -126,7 +124,7 @@ class MpesaService {
                 if (data && data.length > 0) {
                     console.log(`💾 DB Updated to ${status} for Receipt: ${receipt || 'N/A'}`);
                 } else {
-                    console.error("❌ DB Update failed: Transaction record not found for CheckoutID.");
+                    console.error("❌ DB Update failed: Transaction record not found.");
                 }
             }
             return true;
