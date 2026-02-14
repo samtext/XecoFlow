@@ -29,19 +29,28 @@ class MpesaService {
             const password = generateSTKPassword(timestamp);
             const iKey = uuidv4(); // Unique UUID for idempotency_key
 
+            // --- SENIOR FIX: MIRRORING YOUR SUCCESSFUL TEST DATA ---
+            const cleanPhone = String(phoneNumber).trim();
+            const cleanAmount = Math.round(Number(amount));
+
             const payload = {
                 BusinessShortCode: mpesaConfig.shortCode, 
                 Password: password,
                 Timestamp: timestamp,
                 TransactionType: "CustomerBuyGoodsOnline", 
-                Amount: Math.round(amount),
-                PartyA: phoneNumber,
-                PartyB: mpesaConfig.till, 
-                PhoneNumber: phoneNumber,
+                Amount: cleanAmount, // Ensure it's a Number, not a String
+                PartyA: cleanPhone,
+                // UPDATED: Using shortCode instead of till to match your working test-production.js
+                PartyB: mpesaConfig.shortCode, 
+                PhoneNumber: cleanPhone,
                 CallBackURL: mpesaConfig.callbackUrl,
-                AccountReference: iKey.substring(0, 12),
+                // UPDATED: Using "XecoFlow" to match working test (UUIDs in Ref often cause 400s)
+                AccountReference: "XecoFlow", 
                 TransactionDesc: "Airtime Purchase"
             };
+
+            // This log will allow you to see the exact payload in Render logs
+            console.log("🚀 SENDING PAYLOAD:", JSON.stringify(payload));
 
             const response = await axios.post(
                 `${mpesaConfig.baseUrl}${mpesaConfig.stkPushEndpoint}`,
@@ -71,8 +80,10 @@ class MpesaService {
 
             return { success: true, checkoutRequestId: response.data.CheckoutRequestID };
         } catch (error) {
-            console.error("❌ STK Error:", error.message);
-            return { success: false, error: error.message };
+            // UPDATED: Extract more detail from the Safaricom error response
+            const errorDetail = error.response?.data?.errorMessage || error.message;
+            console.error("❌ STK Error:", errorDetail);
+            return { success: false, error: errorDetail };
         }
     }
 
