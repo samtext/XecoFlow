@@ -19,7 +19,6 @@ class MpesaService {
 
     async initiateSTKPush(phoneNumber, amount, userId) {
         try {
-            // userId MUST be passed from your frontend/auth controller
             if (!userId) {
                 throw new Error("User ID is required to link transaction");
             }
@@ -27,9 +26,8 @@ class MpesaService {
             const accessToken = await this.getAccessToken();
             const timestamp = getMpesaTimestamp();
             const password = generateSTKPassword(timestamp);
-            const iKey = uuidv4(); // Unique UUID for idempotency_key
+            const iKey = uuidv4(); 
 
-            // --- SENIOR FIX: MIRRORING YOUR SUCCESSFUL TEST DATA ---
             const cleanPhone = String(phoneNumber).trim();
             const cleanAmount = Math.round(Number(amount));
 
@@ -38,18 +36,15 @@ class MpesaService {
                 Password: password,
                 Timestamp: timestamp,
                 TransactionType: "CustomerBuyGoodsOnline", 
-                Amount: cleanAmount, // Ensure it's a Number, not a String
+                Amount: cleanAmount, 
                 PartyA: cleanPhone,
-                // UPDATED: Using shortCode instead of till to match your working test-production.js
                 PartyB: mpesaConfig.till, 
                 PhoneNumber: cleanPhone,
                 CallBackURL: mpesaConfig.callbackUrl,
-                // UPDATED: Using "XecoFlow" to match working test (UUIDs in Ref often cause 400s)
                 AccountReference: "XecoFlow", 
                 TransactionDesc: "Airtime Purchase"
             };
 
-            // This log will allow you to see the exact payload in Render logs
             console.log("🚀 SENDING PAYLOAD:", JSON.stringify(payload));
 
             const response = await axios.post(
@@ -59,14 +54,14 @@ class MpesaService {
             );
 
             if (response.data.ResponseCode === "0") {
-                // FIXED: Mapping to your specific SQL Schema
-                const { error: insertError } = await db.airtime_transactions().insert([{
-                    user_id: userId,           // System-generated UUID passed here
-                    amount: amount,
-                    phone_number: phoneNumber,      // Matches your SQL schema
-                    network: 'SAFARICOM',           // Matches network_provider enum
-                    status: 'PENDING_PAYMENT',      // Matches transaction_status enum
-                    idempotency_key: iKey,          // Required UNIQUE UUID
+                // ✅ DB STEP 1: Create the transaction record first
+                const { error: insertError } = await db.from('airtime_transactions').insert([{
+                    user_id: userId,
+                    amount: cleanAmount,
+                    phone_number: cleanPhone,
+                    network: 'SAFARICOM',
+                    status: 'PENDING_PAYMENT',
+                    idempotency_key: iKey,
                     checkout_id: response.data.CheckoutRequestID
                 }]);
 
@@ -80,42 +75,63 @@ class MpesaService {
 
             return { success: true, checkoutRequestId: response.data.CheckoutRequestID };
         } catch (error) {
-            // UPDATED: Extract more detail from the Safaricom error response
             const errorDetail = error.response?.data?.errorMessage || error.message;
             console.error("❌ STK Error:", errorDetail);
             return { success: false, error: errorDetail };
         }
     }
 
-    async handleCallback(rawData) {
+    async handleCallback(rawData, ipAddress = null) {
         try {
             if (!rawData?.Body?.stkCallback) return false;
 
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
             
-            // Map ResultCode 0 to PAYMENT_SUCCESS, others to PAYMENT_FAILED
+            // ✅ DB STEP 2: Log the Raw Callback immediately (Audit Trail)
+            // This is the FIRST table to receive the Safaricom data
+            const { error: logError } = await db.from('mpesa_callback_logs').insert([{
+                checkout_request_id: checkoutId,
+                merchant_request_id: cb.MerchantRequestID,
+                raw_payload: rawData,
+                ip_address: ipAddress,
+                metadata: { processed_at: new Date().toISOString() }
+            }]);
+
+            if (logError) console.error("⚠️ Callback Log Error:", logError.message);
+
+            // ✅ DB STEP 3: Sync the results to airtime_transactions
             const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
             
+            let receipt = null;
+            if (status === 'PAYMENT_SUCCESS' && cb.CallbackMetadata) {
+                const items = cb.CallbackMetadata.Item;
+                receipt = items.find(item => item.Name === 'MpesaReceiptNumber')?.Value;
+            }
+
             if (checkoutId) {
-                // Small delay to ensure the 'PENDING_PAYMENT' insert is finished
+                // Wait briefly for the 'PENDING' insert to finalize in Supabase
                 await new Promise(res => setTimeout(res, 2000));
 
-                const { data, error } = await db.airtime_transactions()
-                    .update({ status: status })
+                const { data, error } = await db.from('airtime_transactions')
+                    .update({ 
+                        status: status,
+                        mpesa_receipt: receipt,
+                        updated_at: new Date().toISOString()
+                    })
                     .eq('checkout_id', checkoutId)
                     .select();
 
                 if (error) throw error;
                 if (data && data.length > 0) {
-                    console.log(`💾 DB Updated to ${status}`);
+                    console.log(`💾 DB Updated to ${status} for Receipt: ${receipt || 'N/A'}`);
                 } else {
-                    console.error("❌ DB Update failed: Record not found.");
+                    console.error("❌ DB Update failed: Transaction record not found for CheckoutID.");
                 }
             }
             return true;
         } catch (e) {
-            console.error("❌ Callback Error:", e.message);
+            console.error("❌ Callback Logic Error:", e.message);
             return false;
         }
     }

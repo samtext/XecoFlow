@@ -3,7 +3,7 @@ import 'dotenv/config';
 import mpesaService from './src/services/mpesa.service.js'; 
 
 async function testProduction() {
-    const phoneNumber = "254712071385"; 
+    const phoneNumber = "254708050827"; 
     const amount = 10; 
     
     // Using the authenticated User ID you provided
