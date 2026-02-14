@@ -1,17 +1,15 @@
 import axios from 'axios';
 import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/mpesa.js';
 import { db } from '../config/db.js';
+import { v4 as uuidv4 } from 'uuid'; // Ensure you have uuid installed: npm install uuid
 
 class MpesaService {
     async getAccessToken() {
         try {
             const auth = mpesaConfig.getBasicAuthToken();
-            const url = `${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`;
-            
-            const response = await axios.get(url, { 
+            const response = await axios.get(`${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`, { 
                 headers: { Authorization: `Basic ${auth}` } 
             });
-            
             return response.data.access_token;
         } catch (error) {
             console.error("❌ Auth Error:", error.response?.data || error.message);
@@ -19,12 +17,14 @@ class MpesaService {
         }
     }
 
-    async initiateSTKPush(phoneNumber, amount) {
+    async initiateSTKPush(phoneNumber, amount, userId) {
         try {
             const accessToken = await this.getAccessToken();
             const timestamp = getMpesaTimestamp();
             const password = generateSTKPassword(timestamp);
-            const accountRef = `XECO${Date.now()}`.substring(0, 12);
+            
+            // Your DB requires an idempotency_key (UUID)
+            const iKey = uuidv4();
 
             const payload = {
                 BusinessShortCode: mpesaConfig.shortCode, 
@@ -36,8 +36,8 @@ class MpesaService {
                 PartyB: mpesaConfig.till, 
                 PhoneNumber: phoneNumber,
                 CallBackURL: mpesaConfig.callbackUrl,
-                AccountReference: accountRef,
-                TransactionDesc: "Payment for goods"
+                AccountReference: iKey.substring(0, 12),
+                TransactionDesc: "Airtime Purchase"
             };
 
             const response = await axios.post(
@@ -47,80 +47,62 @@ class MpesaService {
             );
 
             if (response.data.ResponseCode === "0") {
-                // Ensure the database INSERT is awaited so the record exists for the callback
+                // FIXED: Mapping to your specific SQL Schema columns
                 const { error: insertError } = await db.airtime_transactions().insert([{
-                    checkout_id: response.data.CheckoutRequestID,
-                    phone: phoneNumber,
+                    user_id: userId, // Required by your SQL schema
                     amount: amount,
-                    status: 'PENDING',
-                    reference: accountRef,
-                    transaction_type: 'BUY_GOODS'
+                    phone_number: phoneNumber, // Matches your SQL 'phone_number'
+                    network: 'SAFARICOM', // Required by your ENUM network_provider
+                    status: 'PENDING_PAYMENT', // Matches your ENUM transaction_status
+                    idempotency_key: iKey, // Required UNIQUE UUID
+                    checkout_id: response.data.CheckoutRequestID
                 }]);
 
                 if (insertError) {
                     console.error("❌ DB Insert Error:", insertError.message);
                 } else {
-                    console.log(`✅ STK Pushed & Saved: ${response.data.CheckoutRequestID}`);
+                    console.log(`✅ Record Saved PENDING: ${response.data.CheckoutRequestID}`);
                 }
             }
 
             return { success: true, checkoutRequestId: response.data.CheckoutRequestID };
         } catch (error) {
-            console.error("❌ STK Initiation Error:", error.message);
+            console.error("❌ STK Error:", error.message);
             return { success: false, error: error.message };
         }
     }
 
     async handleCallback(rawData) {
         try {
-            console.log("📥 MPESA CALLBACK RECEIVED!");
             if (!rawData?.Body?.stkCallback) return false;
 
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
-            const status = String(cb.ResultCode) === "0" ? 'COMPLETED' : 'FAILED';
             
-            console.log(`🔄 Callback ID: ${checkoutId} | Status: ${status}`);
+            // Mapping M-Pesa result to your SQL ENUM 'transaction_status'
+            const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
+            
+            console.log(`📥 Callback for ${checkoutId}: ${status}`);
 
             if (checkoutId) {
-                // TRY 1: Immediate Update
+                // Wait slightly for the insert to propagate
+                await new Promise(res => setTimeout(res, 2000));
+
                 const { data, error } = await db.airtime_transactions()
-                    .update({ 
-                        status: status, 
-                        updated_at: new Date().toISOString() 
-                    })
+                    .update({ status: status })
                     .eq('checkout_id', checkoutId)
                     .select();
 
-                // TRY 2: If row wasn't found (Race Condition), wait 3s and retry
-                if (!error && (!data || data.length === 0)) {
-                    console.log("🕒 Record not found yet, retrying in 3 seconds...");
-                    await new Promise(res => setTimeout(res, 3000));
-                    
-                    const { data: retryData, error: retryError } = await db.airtime_transactions()
-                        .update({ 
-                            status: status, 
-                            updated_at: new Date().toISOString() 
-                        })
-                        .eq('checkout_id', checkoutId)
-                        .select();
-                    
-                    if (retryError) throw retryError;
-                    
-                    if (retryData && retryData.length > 0) {
-                        console.log(`💾 DB Updated on Retry: ${checkoutId} is now ${status}`);
-                    } else {
-                        console.error(`❌ DB Update Failed: No record found for ID ${checkoutId} even after retry.`);
-                    }
-                } else if (error) {
-                    throw error;
+                if (error) throw error;
+                if (data && data.length > 0) {
+                    console.log(`💾 DB Updated to ${status}`);
                 } else {
-                    console.log(`💾 DB Updated: ${checkoutId} is now ${status}`);
+                    console.error("❌ DB Update failed: Record not found.");
                 }
             }
             return true;
         } catch (e) {
-            console.error("❌ DB Callback Update Error:", e.message);
+            console.error("❌ Callback Error:", e.message);
             return false;
         }
     }
