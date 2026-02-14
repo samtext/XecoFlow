@@ -8,13 +8,13 @@ const mpesaConfig = {
     consumerSecret: (process.env.MPESA_CONSUMER_SECRET || '').trim(),
     passkey: (process.env.MPESA_PASSKEY || '').trim(),
     
-    // The "Parent" code (e.g., 7450249) used for auth and password hashing
-    shortCode: process.env.MPESA_BUSINESS_SHORTCODE, 
+    // UPDATED: Added trim() to prevent "Invalid PartyB" caused by hidden spaces
+    shortCode: (process.env.MPESA_BUSINESS_SHORTCODE || '').trim(), 
     
-    // The actual Buy Goods Till (e.g., 4938110) where money is sent
-    till: process.env.MPESA_TILL, 
+    // UPDATED: Added trim() to ensure this matches your working test (4938110)
+    till: (process.env.MPESA_TILL || '').trim(), 
     
-    callbackUrl: process.env.MPESA_CALLBACK_URL,
+    callbackUrl: (process.env.MPESA_CALLBACK_URL || '').trim(),
     baseUrl: 'https://api.safaricom.co.ke',
     
     authEndpoint: '/oauth/v1/generate?grant_type=client_credentials',
