@@ -72,9 +72,10 @@ router.get('/status/:checkoutRequestId', async (req, res) => {
 
 /**
  * 3. MPESA CALLBACK ROUTE
- * Path: /api/v1/payments/callback
+ * Path: /api/v1/mpesa/callback
+ * UPDATED: Changed path from /payments/callback to /mpesa/callback to match your MpesaService payload
  */
-router.post('/payments/callback', async (req, res) => {
+router.post('/mpesa/callback', async (req, res) => {
     try {
         console.log("📥 MPESA CALLBACK RECEIVED!");
 

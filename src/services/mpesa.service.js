@@ -41,7 +41,7 @@ class MpesaService {
                 Amount: cleanAmount, // Ensure it's a Number, not a String
                 PartyA: cleanPhone,
                 // UPDATED: Using shortCode instead of till to match your working test-production.js
-                PartyB: mpesaConfig.shortCode, 
+                PartyB: mpesaConfig.till, 
                 PhoneNumber: cleanPhone,
                 CallBackURL: mpesaConfig.callbackUrl,
                 // UPDATED: Using "XecoFlow" to match working test (UUIDs in Ref often cause 400s)
