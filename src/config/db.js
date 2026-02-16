@@ -6,6 +6,10 @@ import { DB_MAPPING } from './systemRules.js';
  * Single source of truth for table access.
  */
 export const db = {
+    // ✅ NEW: Added direct .from method to prevent "is not a function" errors
+    // This allows both db.from('table') and db.airtime_transactions() to work.
+    from: (tableName) => supabaseAdmin.from(tableName),
+
     // ✅ UPDATED: Switched to supabaseAdmin to allow Guest/No-Login transactions
     airtime_transactions: () => supabaseAdmin.from(DB_MAPPING.TABLES.TRANSACTIONS),
 

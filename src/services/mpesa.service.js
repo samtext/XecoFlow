@@ -46,7 +46,7 @@ class MpesaService {
                 TransactionDesc: "Airtime Purchase"
             };
 
-            console.log("🚀 SENDING PAYLOAD:", JSON.stringify(payload));
+            console.log("🚀 [STK_PUSH]: Sending Payload to Safaricom...");
 
             const response = await axios.post(
                 `${mpesaConfig.baseUrl}${mpesaConfig.stkPushEndpoint}`,
@@ -55,9 +55,9 @@ class MpesaService {
             );
 
             if (response.data.ResponseCode === "0") {
-                console.log(`📡 [DB_SAVE_INIT]: Saving record for Visitor: ${userId}`);
+                console.log(`📡 [DB_SAVE_INIT]: Attempting to record Pending Transaction for Visitor: ${userId}`);
                 
-                // Uses the supabaseAdmin mapping we set in db.js to bypass RLS
+                // Uses the supabaseAdmin mapping in db.js to bypass RLS for Guest users
                 const { data, error: insertError } = await db.airtime_transactions()
                     .insert([{
                         user_id: userId,
@@ -71,12 +71,13 @@ class MpesaService {
                     .select();
 
                 if (insertError) {
-                    console.error("❌ [DATABASE_REJECTION]:", JSON.stringify(insertError, null, 2));
-                    return { success: false, error: insertError.message };
+                    console.error("❌ [DATABASE_REJECTION]: Failed to save pending airtime record:", JSON.stringify(insertError, null, 2));
+                    // We return success true because the STK was still sent to the user's phone
+                    return { success: true, checkoutRequestId: response.data.CheckoutRequestID, db_warning: "Record not saved" };
                 }
                 
                 if (data && data.length > 0) {
-                    console.log(`✅ [DB_SUCCESS]: Guest Transaction saved: ${data[0].id}`);
+                    console.log(`✅ [DB_SUCCESS]: Guest Transaction record created: ${data[0].id}`);
                 }
             }
 
@@ -96,13 +97,15 @@ class MpesaService {
             const checkoutId = cb.CheckoutRequestID;
             const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
 
+            console.log(`📩 [MPESA_CALLBACK]: Processing CheckoutID: ${checkoutId} | Status: ${status}`);
+
             const metadataPayload = { 
                 processed_at: new Date().toISOString(),
                 ip_address: ipAddress,
                 result_desc: cb.ResultDesc || "No description provided"
             };
 
-            // Log callback evidence
+            // Log callback evidence to mpesa_callback_logs
             const { error: logError } = await db.mpesa_callback_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
@@ -112,7 +115,7 @@ class MpesaService {
                 metadata: metadataPayload
             }]);
 
-            if (logError) console.error("⚠️ Callback Log Error:", logError.message);
+            if (logError) console.error("⚠️ [LOG_ERROR]: Could not save raw callback log:", logError.message);
 
             let receipt = null;
             if (status === 'PAYMENT_SUCCESS' && cb.CallbackMetadata?.Item) {
@@ -123,7 +126,10 @@ class MpesaService {
             }
 
             if (checkoutId) {
-                await new Promise(res => setTimeout(res, 2000));
+                // Short delay to ensure the initial 'PENDING' record has finished writing in high-latency scenarios
+                await new Promise(res => setTimeout(res, 1000));
+
+                console.log(`⏳ [PROCESSING]: Updating airtime_transactions table for ${checkoutId}...`);
 
                 const { data, error } = await db.airtime_transactions()
                     .update({ 
@@ -136,12 +142,14 @@ class MpesaService {
                     .select();
 
                 if (error) {
-                    console.error("❌ [CALLBACK_UPDATE_ERROR]:", error.message);
+                    console.error("❌ [CALLBACK_UPDATE_ERROR]: Update failed for airtime table:", error.message);
                     throw error;
                 }
 
                 if (data && data.length > 0) {
-                    console.log(`💾 [DB_FINALIZED]: Transaction ${data[0].id} updated to ${status}`);
+                    console.log(`✅ [DB_UPDATE]: Transaction record finalized. ID: ${data[0].id} is now ${status}`);
+                } else {
+                    console.warn(`⚠️ [DB_MISMATCH]: No pending transaction found for CheckoutID: ${checkoutId}. Record was not updated.`);
                 }
             }
             return true;
