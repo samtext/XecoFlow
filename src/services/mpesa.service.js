@@ -87,45 +87,47 @@ class MpesaService {
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
             
-            // ✅ Define the metadata object once to be used for both tables
+            // ✅ Calculate status FIRST so we can log it correctly
+            const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
+
+            // ✅ Define the metadata object
             const metadataPayload = { 
                 processed_at: new Date().toISOString(),
                 ip_address: ipAddress,
                 result_desc: cb.ResultDesc || "No description provided"
             };
 
-            // ✅ Log raw evidence to mpesa_logs table
+            // ✅ Log to mpesa_logs table WITH the status
             const { error: logError } = await db.mpesa_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
                 raw_payload: rawData,
                 ip_address: ipAddress,
+                status: status, // 👈 Added status here to fix your empty logs issue
                 metadata: metadataPayload
             }]);
 
             if (logError) console.error("⚠️ Callback Log Error:", logError.message);
 
-            const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
-            
             let receipt = null;
             if (status === 'PAYMENT_SUCCESS' && cb.CallbackMetadata?.Item) {
                 const items = cb.CallbackMetadata.Item;
                 const receiptItem = items.find(item => item.Name === 'MpesaReceiptNumber');
                 receipt = receiptItem ? receiptItem.Value : null;
                 
-                // ✅ Add the receipt number to the metadata object for visibility
+                // Add the receipt number to the metadata object
                 metadataPayload.mpesa_receipt = receipt;
             }
 
             if (checkoutId) {
-                // Ensure Stage 1 insert has finished in Supabase before updating
                 await new Promise(res => setTimeout(res, 2000));
 
+                // ✅ Update airtime_transactions WITH metadata
                 const { data, error } = await db.airtime_transactions()
                     .update({ 
                         status: status,
                         mpesa_receipt: receipt,
-                        metadata: metadataPayload, // ✅ This ensures the field is no longer empty
+                        metadata: metadataPayload, // 👈 Populates the field in airtime_transactions
                         updated_at: new Date().toISOString()
                     })
                     .eq('checkout_id', checkoutId)
