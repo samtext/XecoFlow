@@ -8,10 +8,14 @@ import { DB_MAPPING } from './systemRules.js';
  * defining the methods used in MpesaService.js.
  */
 export const db = {
-    // Primary airtime transaction mapping
+    // Primary airtime transaction mapping (UUID Enabled)
     airtime_transactions: () => supabase.from(DB_MAPPING.TABLES.TRANSACTIONS),
 
-    // M-Pesa Evidence mapping (Uses Admin for RLS bypass)
+    // ✅ FIXED: Added mpesa_callback_logs to match MpesaService requirements
+    // Uses supabaseAdmin to ensure callbacks are logged even if RLS is strict
+    mpesa_callback_logs: () => supabaseAdmin.from('mpesa_callback_logs'),
+
+    // Legacy mapping support (if still used in other files)
     mpesa_logs: () => supabaseAdmin.from(DB_MAPPING.TABLES.MPESA_LOGS),
 
     // Standard mappings
@@ -24,4 +28,4 @@ export const db = {
 };
 
 // Log operational status to help debug Render deployments
-console.log("🚀 XECO-ENGINE: Database Abstraction Layer Operational.");
+console.log("🚀 XECO-ENGINE: Database Abstraction Layer Operational (UUID Support Active).");

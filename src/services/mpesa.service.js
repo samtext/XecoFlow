@@ -54,8 +54,8 @@ class MpesaService {
             );
 
             if (response.data.ResponseCode === "0") {
-                // ✅ Table updated to 'airtime_transactions' (Matches your UUID table)
-                const { error: insertError } = await db.from('airtime_transactions').insert([{
+                // ✅ FIXED: Using db.airtime_transactions() instead of db.from()
+                const { error: insertError } = await db.airtime_transactions().insert([{
                     user_id: userId,
                     amount: cleanAmount,
                     phone_number: cleanPhone,
@@ -88,18 +88,16 @@ class MpesaService {
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
             
-            // ✅ Calculate status FIRST so we can log it correctly
             const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
 
-            // ✅ Define the metadata object
             const metadataPayload = { 
                 processed_at: new Date().toISOString(),
                 ip_address: ipAddress,
                 result_desc: cb.ResultDesc || "No description provided"
             };
 
-            // ✅ TABLE UPDATED: Changed from 'mpesa_logs' to 'mpesa_callback_logs' 
-            const { error: logError } = await db.from('mpesa_callback_logs').insert([{
+            // ✅ FIXED: Using db.mpesa_callback_logs() instead of db.from()
+            const { error: logError } = await db.mpesa_callback_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
                 raw_payload: rawData,
@@ -115,17 +113,14 @@ class MpesaService {
                 const items = cb.CallbackMetadata.Item;
                 const receiptItem = items.find(item => item.Name === 'MpesaReceiptNumber');
                 receipt = receiptItem ? receiptItem.Value : null;
-                
-                // Add the receipt number to the metadata object
                 metadataPayload.mpesa_receipt = receipt;
             }
 
             if (checkoutId) {
-                // Brief pause to ensure the initiation record has settled in Supabase
                 await new Promise(res => setTimeout(res, 2000));
 
-                // ✅ Update airtime_transactions WITH metadata
-                const { data, error } = await db.from('airtime_transactions')
+                // ✅ FIXED: Using db.airtime_transactions() instead of db.from()
+                const { data, error } = await db.airtime_transactions()
                     .update({ 
                         status: status,
                         mpesa_receipt: receipt,
