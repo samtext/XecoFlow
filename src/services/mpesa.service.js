@@ -87,25 +87,34 @@ class MpesaService {
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
             
-            // ✅ Log raw evidence to mpesa_logs table using supabaseAdmin logic
+            // ✅ Define the metadata object once to be used for both tables
+            const metadataPayload = { 
+                processed_at: new Date().toISOString(),
+                ip_address: ipAddress,
+                result_desc: cb.ResultDesc || "No description provided"
+            };
+
+            // ✅ Log raw evidence to mpesa_logs table
             const { error: logError } = await db.mpesa_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
                 raw_payload: rawData,
                 ip_address: ipAddress,
-                metadata: { processed_at: new Date().toISOString() }
+                metadata: metadataPayload
             }]);
 
             if (logError) console.error("⚠️ Callback Log Error:", logError.message);
 
             const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
             
-            // ✅ Fixed Receipt Extraction: Safely parse the metadata items array
             let receipt = null;
             if (status === 'PAYMENT_SUCCESS' && cb.CallbackMetadata?.Item) {
                 const items = cb.CallbackMetadata.Item;
                 const receiptItem = items.find(item => item.Name === 'MpesaReceiptNumber');
                 receipt = receiptItem ? receiptItem.Value : null;
+                
+                // ✅ Add the receipt number to the metadata object for visibility
+                metadataPayload.mpesa_receipt = receipt;
             }
 
             if (checkoutId) {
@@ -116,6 +125,7 @@ class MpesaService {
                     .update({ 
                         status: status,
                         mpesa_receipt: receipt,
+                        metadata: metadataPayload, // ✅ This ensures the field is no longer empty
                         updated_at: new Date().toISOString()
                     })
                     .eq('checkout_id', checkoutId)
