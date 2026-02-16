@@ -17,6 +17,31 @@ class MpesaService {
         }
     }
 
+    // --- 🚀 LANE 2: C2B REGISTRATION (ONE-TIME SETUP) ---
+    async registerC2Bv2() {
+        try {
+            const accessToken = await this.getAccessToken();
+            const url = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
+
+            const payload = {
+                ShortCode: mpesaConfig.shortCode,
+                ResponseType: "Completed",
+                ConfirmationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-confirmation",
+                ValidationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-validation"
+            };
+
+            console.log("📡 [C2B_REG]: Registering URLs with Safaricom...");
+            const response = await axios.post(url, payload, {
+                headers: { Authorization: `Bearer ${accessToken}` }
+            });
+
+            return response.data;
+        } catch (error) {
+            console.error("❌ C2B Reg Error:", error.response?.data || error.message);
+            throw error;
+        }
+    }
+
     async initiateSTKPush(phoneNumber, amount, userId) {
         try {
             // ✅ userId can now be a Guest ID from the frontend
@@ -72,8 +97,6 @@ class MpesaService {
                     .select();
 
                 if (insertError) {
-                    // ⚠️ If this triggers, check if 'user_id' in Supabase is a Foreign Key to auth.users. 
-                    // If it is, guest IDs will be rejected.
                     console.error("❌ [DATABASE_REJECTION]:", JSON.stringify(insertError, null, 2));
                     return { success: true, checkoutRequestId: checkoutId, db_warning: "Record not saved to airtime_transactions" };
                 }
@@ -128,12 +151,10 @@ class MpesaService {
             }
 
             if (checkoutId) {
-                // Ensure the initial insert has finished before we try to update it
                 await new Promise(res => setTimeout(res, 2500));
 
                 console.log(`⏳ [DB_UPDATE_START]: Finalizing transaction in airtime_transactions...`);
 
-                // ✅ STEP 3: Update the record created in Step 1
                 const { data, error } = await db.airtime_transactions()
                     .update({ 
                         status: status,
@@ -152,13 +173,47 @@ class MpesaService {
                 if (data && data.length > 0) {
                     console.log(`✅ [DB_FINALIZED]: Transaction updated to ${status}.`);
                 } else {
-                    // This warning appears if the row was never created in initiateSTKPush
                     console.warn(`⚠️ [DB_MISMATCH]: No row found in airtime_transactions with checkout_id: ${checkoutId}.`);
                 }
             }
             return true;
         } catch (e) {
             console.error("❌ [CALLBACK_CRASH]:", e.message);
+            return false;
+        }
+    }
+
+    // --- 💰 LANE 2: HANDLE MANUAL (C2B) CONFIRMATION ---
+    async handleC2BConfirmation(c2bData) {
+        try {
+            const { TransID, TransAmount, MSISDN, BillRefNumber } = c2bData;
+            
+            console.log(`💰 [C2B_PROCESS]: Processing Manual Payment ${TransID} from ${MSISDN}`);
+
+            // Log this manual payment to your callback logs for safety
+            await db.mpesa_callback_logs().insert([{
+                checkout_request_id: TransID, // Using TransID as unique ref for C2B
+                raw_payload: c2bData,
+                status: 'C2B_SUCCESS',
+                metadata: { type: 'MANUAL_TILL_PAYMENT', account: BillRefNumber }
+            }]);
+
+            // Create the airtime transaction record for C2B
+            const { error: insertError } = await db.airtime_transactions().insert([{
+                user_id: 'C2B_WALK_IN', // Placeholder for manual payers
+                amount: Math.round(Number(TransAmount)),
+                phone_number: MSISDN,
+                network: 'SAFARICOM',
+                status: 'PAYMENT_SUCCESS', // It's already confirmed by Safaricom
+                mpesa_receipt: TransID,
+                checkout_id: TransID
+            }]);
+
+            if (insertError) console.error("❌ [C2B_DB_ERROR]:", insertError.message);
+            
+            return true;
+        } catch (error) {
+            console.error("❌ [C2B_HANDLING_CRASH]:", error.message);
             return false;
         }
     }
