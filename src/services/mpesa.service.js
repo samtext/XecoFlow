@@ -19,8 +19,9 @@ class MpesaService {
 
     async initiateSTKPush(phoneNumber, amount, userId) {
         try {
+            // userId now accepts the Visitor ID from your frontend
             if (!userId) {
-                throw new Error("User ID is required to link transaction");
+                throw new Error("Identity (Visitor ID) is required to link transaction");
             }
 
             const accessToken = await this.getAccessToken();
@@ -54,9 +55,9 @@ class MpesaService {
             );
 
             if (response.data.ResponseCode === "0") {
-                console.log(`📡 [DB_SAVE_INIT]: Attempting to save record for ${response.data.CheckoutRequestID}`);
+                console.log(`📡 [DB_SAVE_INIT]: Saving record for Visitor: ${userId}`);
                 
-                // ✅ Using db.airtime_transactions() with .select() to confirm save
+                // Uses the supabaseAdmin mapping we set in db.js to bypass RLS
                 const { data, error: insertError } = await db.airtime_transactions()
                     .insert([{
                         user_id: userId,
@@ -67,18 +68,15 @@ class MpesaService {
                         idempotency_key: iKey,
                         checkout_id: response.data.CheckoutRequestID
                     }])
-                    .select(); // 👈 This forces the DB to return the saved row
+                    .select();
 
                 if (insertError) {
-                    // This will print the exact RLS or Schema error in your Render logs
                     console.error("❌ [DATABASE_REJECTION]:", JSON.stringify(insertError, null, 2));
                     return { success: false, error: insertError.message };
                 }
                 
                 if (data && data.length > 0) {
-                    console.log(`✅ [DB_SUCCESS]: Transaction saved with UUID: ${data[0].id}`);
-                } else {
-                    console.warn("⚠️ [DB_EMPTY]: Insert command finished but no data returned. Check RLS policies.");
+                    console.log(`✅ [DB_SUCCESS]: Guest Transaction saved: ${data[0].id}`);
                 }
             }
 
@@ -96,7 +94,6 @@ class MpesaService {
 
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
-            
             const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
 
             const metadataPayload = { 
@@ -105,7 +102,7 @@ class MpesaService {
                 result_desc: cb.ResultDesc || "No description provided"
             };
 
-            // ✅ Log callback evidence
+            // Log callback evidence
             const { error: logError } = await db.mpesa_callback_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
@@ -126,7 +123,6 @@ class MpesaService {
             }
 
             if (checkoutId) {
-                // Wait for the initiation insert to propogate
                 await new Promise(res => setTimeout(res, 2000));
 
                 const { data, error } = await db.airtime_transactions()
@@ -146,9 +142,6 @@ class MpesaService {
 
                 if (data && data.length > 0) {
                     console.log(`💾 [DB_FINALIZED]: Transaction ${data[0].id} updated to ${status}`);
-                } else {
-                    // If this logs, it means the initiation record was never saved in Step 1
-                    console.error(`❌ [UPDATE_FAILED]: No record found for CheckoutID: ${checkoutId}. Initiation likely failed.`);
                 }
             }
             return true;

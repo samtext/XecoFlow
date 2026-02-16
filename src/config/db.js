@@ -4,15 +4,12 @@ import { DB_MAPPING } from './systemRules.js';
 /**
  * BIG-SYSTEM-V1.2 | DATABASE MANAGER
  * Single source of truth for table access.
- * This structure prevents "is not a function" errors by explicitly 
- * defining the methods used in MpesaService.js.
  */
 export const db = {
-    // Primary airtime transaction mapping (UUID Enabled)
-    airtime_transactions: () => supabase.from(DB_MAPPING.TABLES.TRANSACTIONS),
+    // ✅ UPDATED: Switched to supabaseAdmin to allow Guest/No-Login transactions
+    airtime_transactions: () => supabaseAdmin.from(DB_MAPPING.TABLES.TRANSACTIONS),
 
     // ✅ FIXED: Added mpesa_callback_logs to match MpesaService requirements
-    // Uses supabaseAdmin to ensure callbacks are logged even if RLS is strict
     mpesa_callback_logs: () => supabaseAdmin.from('mpesa_callback_logs'),
 
     // Legacy mapping support (if still used in other files)
@@ -28,4 +25,4 @@ export const db = {
 };
 
 // Log operational status to help debug Render deployments
-console.log("🚀 XECO-ENGINE: Database Abstraction Layer Operational (UUID Support Active).");
+console.log("🚀 XECO-ENGINE: Database Abstraction Layer Operational (Guest Support Active).");
