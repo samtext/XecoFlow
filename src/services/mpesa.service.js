@@ -53,9 +53,7 @@ class MpesaService {
                 { headers: { Authorization: `Bearer ${accessToken}` } }
             );
 
-            // ResponseCode "0" means Safaricom accepted the STK request
             if (response.data.ResponseCode === "0") {
-                // ✅ Matches db.airtime_transactions mapping in your db.js
                 const { error: insertError } = await db.airtime_transactions().insert([{
                     user_id: userId,
                     amount: cleanAmount,
@@ -89,8 +87,7 @@ class MpesaService {
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
             
-            // ✅ FIX: Uses db.mpesa_logs() to match your Database Manager mapping.
-            // This specifically uses supabaseAdmin to bypass RLS as per your db.js
+            // ✅ Log raw evidence to mpesa_logs table using supabaseAdmin logic
             const { error: logError } = await db.mpesa_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
@@ -103,14 +100,16 @@ class MpesaService {
 
             const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
             
+            // ✅ Fixed Receipt Extraction: Safely parse the metadata items array
             let receipt = null;
-            if (status === 'PAYMENT_SUCCESS' && cb.CallbackMetadata) {
+            if (status === 'PAYMENT_SUCCESS' && cb.CallbackMetadata?.Item) {
                 const items = cb.CallbackMetadata.Item;
-                receipt = items.find(item => item.Name === 'MpesaReceiptNumber')?.Value;
+                const receiptItem = items.find(item => item.Name === 'MpesaReceiptNumber');
+                receipt = receiptItem ? receiptItem.Value : null;
             }
 
             if (checkoutId) {
-                // Delay to ensure the initial 'PENDING' insert is fully indexed
+                // Ensure Stage 1 insert has finished in Supabase before updating
                 await new Promise(res => setTimeout(res, 2000));
 
                 const { data, error } = await db.airtime_transactions()
@@ -124,7 +123,7 @@ class MpesaService {
 
                 if (error) throw error;
                 if (data && data.length > 0) {
-                    console.log(`💾 DB Updated to ${status} for Receipt: ${receipt || 'N/A'}`);
+                    console.log(`💾 DB Updated to ${status} | Receipt: ${receipt || 'N/A'}`);
                 } else {
                     console.error("❌ DB Update failed: Record not found.");
                 }
