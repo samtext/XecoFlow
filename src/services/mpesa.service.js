@@ -19,6 +19,7 @@ class MpesaService {
 
     async initiateSTKPush(phoneNumber, amount, userId) {
         try {
+            // ✅ userId can now be a Guest ID from the frontend
             if (!userId) {
                 throw new Error("Identity (Visitor ID) is required to link transaction");
             }
@@ -56,11 +57,11 @@ class MpesaService {
             // ✅ STEP 1: Recording the PENDING record immediately
             if (response.data.ResponseCode === "0") {
                 const checkoutId = response.data.CheckoutRequestID;
-                console.log(`📡 [DB_SAVE_INIT]: Recording PENDING status for ID: ${checkoutId}`);
+                console.log(`📡 [DB_SAVE_INIT]: Attempting to save PENDING status for ID: ${checkoutId}`);
                 
                 const { data, error: insertError } = await db.airtime_transactions()
                     .insert([{
-                        user_id: userId,
+                        user_id: userId, // Accepts Guest UUID or Logged-in UUID
                         amount: cleanAmount,
                         phone_number: cleanPhone,
                         network: 'SAFARICOM',
@@ -71,13 +72,14 @@ class MpesaService {
                     .select();
 
                 if (insertError) {
-                    // This is why [DB_MISMATCH] happens
+                    // ⚠️ If this triggers, check if 'user_id' in Supabase is a Foreign Key to auth.users. 
+                    // If it is, guest IDs will be rejected.
                     console.error("❌ [DATABASE_REJECTION]:", JSON.stringify(insertError, null, 2));
-                    return { success: true, checkoutRequestId: checkoutId, db_warning: "Record not saved" };
+                    return { success: true, checkoutRequestId: checkoutId, db_warning: "Record not saved to airtime_transactions" };
                 }
                 
                 if (data && data.length > 0) {
-                    console.log(`✅ [DB_SUCCESS]: Pending record created: ${data[0].id}`);
+                    console.log(`✅ [DB_SUCCESS]: Pending record created in airtime_transactions table.`);
                 }
             }
 
@@ -97,7 +99,7 @@ class MpesaService {
             const checkoutId = cb.CheckoutRequestID;
             const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
 
-            console.log(`📩 [MPESA_CALLBACK]: Processing CheckoutID: ${checkoutId} | Status: ${status}`);
+            console.log(`📩 [MPESA_CALLBACK]: Received CheckoutID: ${checkoutId} | Result: ${status}`);
 
             const metadataPayload = { 
                 processed_at: new Date().toISOString(),
@@ -105,7 +107,7 @@ class MpesaService {
                 result_desc: cb.ResultDesc || "No description provided"
             };
 
-            // ✅ STEP 2: Log callback for evidence
+            // ✅ STEP 2: Always log the callback first (Audit Trail)
             const { error: logError } = await db.mpesa_callback_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
@@ -115,7 +117,7 @@ class MpesaService {
                 metadata: metadataPayload
             }]);
 
-            if (logError) console.error("⚠️ [LOG_ERROR]:", logError.message);
+            if (logError) console.error("⚠️ [LOG_TABLE_ERROR]:", logError.message);
 
             let receipt = null;
             if (status === 'PAYMENT_SUCCESS' && cb.CallbackMetadata?.Item) {
@@ -126,12 +128,12 @@ class MpesaService {
             }
 
             if (checkoutId) {
-                // Increased delay to ensure DB write completion
+                // Ensure the initial insert has finished before we try to update it
                 await new Promise(res => setTimeout(res, 2500));
 
-                console.log(`⏳ [PROCESSING]: Updating airtime_transactions for ${checkoutId}...`);
+                console.log(`⏳ [DB_UPDATE_START]: Finalizing transaction in airtime_transactions...`);
 
-                // ✅ STEP 3: Updating the record created in Step 1
+                // ✅ STEP 3: Update the record created in Step 1
                 const { data, error } = await db.airtime_transactions()
                     .update({ 
                         status: status,
@@ -143,20 +145,20 @@ class MpesaService {
                     .select();
 
                 if (error) {
-                    console.error("❌ [CALLBACK_UPDATE_ERROR]:", error.message);
+                    console.error("❌ [DB_UPDATE_FAILED]:", error.message);
                     throw error;
                 }
 
                 if (data && data.length > 0) {
-                    console.log(`✅ [DB_UPDATE]: Transaction finalized for ID: ${data[0].id}`);
+                    console.log(`✅ [DB_FINALIZED]: Transaction updated to ${status}.`);
                 } else {
-                    // Mismatch happens if Step 1 failed or checkout_id column is missing
-                    console.warn(`⚠️ [DB_MISMATCH]: No pending transaction found for CheckoutID: ${checkoutId}.`);
+                    // This warning appears if the row was never created in initiateSTKPush
+                    console.warn(`⚠️ [DB_MISMATCH]: No row found in airtime_transactions with checkout_id: ${checkoutId}.`);
                 }
             }
             return true;
         } catch (e) {
-            console.error("❌ Callback Logic Error:", e.message);
+            console.error("❌ [CALLBACK_CRASH]:", e.message);
             return false;
         }
     }
