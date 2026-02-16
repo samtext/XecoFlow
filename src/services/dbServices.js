@@ -6,6 +6,9 @@ import { db } from '../config/db.js';
 import { v4 as uuidv4 } from 'uuid'; 
 
 class DbService {
+    /**
+     * 1. CREATE INITIAL TRANSACTION
+     */
     async createTransactionRecord(phone, amount, userId) {
         if (!userId) {
             throw new Error("SYSTEM_RULE_VIOLATION: user_id is missing.");
@@ -34,6 +37,9 @@ class DbService {
         return data;
     }
 
+    /**
+     * 2. LINK CHECKOUT ID TO TRANSACTION
+     */
     async linkCheckoutId(internalId, checkoutId) {
         console.log(`🔗 DB_SERVICE: Linking CheckoutID ${checkoutId}...`);
         
@@ -46,6 +52,29 @@ class DbService {
 
         if (error) throw new Error(`DB_LINK_ERROR: ${error.message}`);
         return true;
+    }
+
+    /**
+     * 3. LOG CALLBACK DATA (NEWLY ADDED)
+     * Target: mpesa_callback_logs
+     */
+    async logMpesaCallback(payload, ipAddress) {
+        console.log(`📡 DB_SERVICE: Logging callback from ${ipAddress}...`);
+
+        const { data, error } = await db.from('mpesa_callback_logs').insert([{
+            // Note: 'id' is omitted as the DB now generates the UUID automatically
+            payload: payload,
+            ip_address: ipAddress,
+            created_at: new Date().toISOString()
+        }]);
+
+        if (error) {
+            console.error("⚠️ DB_LOG_ERROR:", error.message);
+            // We don't throw an error here to prevent the whole callback from crashing
+            return null;
+        }
+
+        return data;
     }
 }
 

@@ -54,7 +54,8 @@ class MpesaService {
             );
 
             if (response.data.ResponseCode === "0") {
-                const { error: insertError } = await db.airtime_transactions().insert([{
+                // ✅ Table updated to 'airtime_transactions' (Matches your UUID table)
+                const { error: insertError } = await db.from('airtime_transactions').insert([{
                     user_id: userId,
                     amount: cleanAmount,
                     phone_number: cleanPhone,
@@ -97,13 +98,13 @@ class MpesaService {
                 result_desc: cb.ResultDesc || "No description provided"
             };
 
-            // ✅ Log to mpesa_logs table WITH the status
-            const { error: logError } = await db.mpesa_logs().insert([{
+            // ✅ TABLE UPDATED: Changed from 'mpesa_logs' to 'mpesa_callback_logs' 
+            const { error: logError } = await db.from('mpesa_callback_logs').insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
                 raw_payload: rawData,
                 ip_address: ipAddress,
-                status: status, // 👈 Added status here to fix your empty logs issue
+                status: status, 
                 metadata: metadataPayload
             }]);
 
@@ -120,14 +121,15 @@ class MpesaService {
             }
 
             if (checkoutId) {
+                // Brief pause to ensure the initiation record has settled in Supabase
                 await new Promise(res => setTimeout(res, 2000));
 
                 // ✅ Update airtime_transactions WITH metadata
-                const { data, error } = await db.airtime_transactions()
+                const { data, error } = await db.from('airtime_transactions')
                     .update({ 
                         status: status,
                         mpesa_receipt: receipt,
-                        metadata: metadataPayload, // 👈 Populates the field in airtime_transactions
+                        metadata: metadataPayload, 
                         updated_at: new Date().toISOString()
                     })
                     .eq('checkout_id', checkoutId)
