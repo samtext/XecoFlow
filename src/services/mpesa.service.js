@@ -54,23 +54,32 @@ class MpesaService {
             );
 
             if (response.data.ResponseCode === "0") {
-                // ✅ FIXED: Using db.airtime_transactions() instead of db.from()
-                const { error: insertError } = await db.airtime_transactions().insert([{
-                    user_id: userId,
-                    amount: cleanAmount,
-                    phone_number: cleanPhone,
-                    network: 'SAFARICOM',
-                    status: 'PENDING_PAYMENT',
-                    idempotency_key: iKey,
-                    checkout_id: response.data.CheckoutRequestID
-                }]);
+                console.log(`📡 [DB_SAVE_INIT]: Attempting to save record for ${response.data.CheckoutRequestID}`);
+                
+                // ✅ Using db.airtime_transactions() with .select() to confirm save
+                const { data, error: insertError } = await db.airtime_transactions()
+                    .insert([{
+                        user_id: userId,
+                        amount: cleanAmount,
+                        phone_number: cleanPhone,
+                        network: 'SAFARICOM',
+                        status: 'PENDING_PAYMENT',
+                        idempotency_key: iKey,
+                        checkout_id: response.data.CheckoutRequestID
+                    }])
+                    .select(); // 👈 This forces the DB to return the saved row
 
                 if (insertError) {
-                    console.error("❌ DB Insert Error:", insertError.message);
+                    // This will print the exact RLS or Schema error in your Render logs
+                    console.error("❌ [DATABASE_REJECTION]:", JSON.stringify(insertError, null, 2));
                     return { success: false, error: insertError.message };
                 }
                 
-                console.log(`✅ Transaction Initiated: ${response.data.CheckoutRequestID}`);
+                if (data && data.length > 0) {
+                    console.log(`✅ [DB_SUCCESS]: Transaction saved with UUID: ${data[0].id}`);
+                } else {
+                    console.warn("⚠️ [DB_EMPTY]: Insert command finished but no data returned. Check RLS policies.");
+                }
             }
 
             return { success: true, checkoutRequestId: response.data.CheckoutRequestID };
@@ -96,7 +105,7 @@ class MpesaService {
                 result_desc: cb.ResultDesc || "No description provided"
             };
 
-            // ✅ FIXED: Using db.mpesa_callback_logs() instead of db.from()
+            // ✅ Log callback evidence
             const { error: logError } = await db.mpesa_callback_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
@@ -117,9 +126,9 @@ class MpesaService {
             }
 
             if (checkoutId) {
+                // Wait for the initiation insert to propogate
                 await new Promise(res => setTimeout(res, 2000));
 
-                // ✅ FIXED: Using db.airtime_transactions() instead of db.from()
                 const { data, error } = await db.airtime_transactions()
                     .update({ 
                         status: status,
@@ -130,11 +139,16 @@ class MpesaService {
                     .eq('checkout_id', checkoutId)
                     .select();
 
-                if (error) throw error;
+                if (error) {
+                    console.error("❌ [CALLBACK_UPDATE_ERROR]:", error.message);
+                    throw error;
+                }
+
                 if (data && data.length > 0) {
-                    console.log(`💾 DB Updated to ${status} | Receipt: ${receipt || 'N/A'}`);
+                    console.log(`💾 [DB_FINALIZED]: Transaction ${data[0].id} updated to ${status}`);
                 } else {
-                    console.error("❌ DB Update failed: Record not found.");
+                    // If this logs, it means the initiation record was never saved in Step 1
+                    console.error(`❌ [UPDATE_FAILED]: No record found for CheckoutID: ${checkoutId}. Initiation likely failed.`);
                 }
             }
             return true;
