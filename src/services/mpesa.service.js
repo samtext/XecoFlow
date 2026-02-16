@@ -53,8 +53,9 @@ class MpesaService {
                 { headers: { Authorization: `Bearer ${accessToken}` } }
             );
 
+            // ResponseCode "0" means Safaricom accepted the STK request
             if (response.data.ResponseCode === "0") {
-                // ✅ Matches db.airtime_transactions in your db.js
+                // ✅ Matches db.airtime_transactions mapping in your db.js
                 const { error: insertError } = await db.airtime_transactions().insert([{
                     user_id: userId,
                     amount: cleanAmount,
@@ -88,11 +89,11 @@ class MpesaService {
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
             
-            // ✅ FIX: Changed mpesa_callback_logs() to mpesa_logs() 
-            // This matches the mapping in your provided db.js file
+            // ✅ FIX: Uses db.mpesa_logs() to match your Database Manager mapping.
+            // This specifically uses supabaseAdmin to bypass RLS as per your db.js
             const { error: logError } = await db.mpesa_logs().insert([{
                 checkout_request_id: checkoutId,
-                merchant_request_id: cb.Merchant_Request_ID || null,
+                merchant_request_id: cb.MerchantRequestID || null,
                 raw_payload: rawData,
                 ip_address: ipAddress,
                 metadata: { processed_at: new Date().toISOString() }
@@ -109,7 +110,7 @@ class MpesaService {
             }
 
             if (checkoutId) {
-                // Ensure Stage 1 insert has finished in Supabase
+                // Delay to ensure the initial 'PENDING' insert is fully indexed
                 await new Promise(res => setTimeout(res, 2000));
 
                 const { data, error } = await db.airtime_transactions()
@@ -125,7 +126,7 @@ class MpesaService {
                 if (data && data.length > 0) {
                     console.log(`💾 DB Updated to ${status} for Receipt: ${receipt || 'N/A'}`);
                 } else {
-                    console.error("❌ DB Update failed: Transaction record not found.");
+                    console.error("❌ DB Update failed: Record not found.");
                 }
             }
             return true;
