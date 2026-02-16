@@ -54,7 +54,7 @@ class MpesaService {
             );
 
             if (response.data.ResponseCode === "0") {
-                // ✅ Using your specific db helper syntax to avoid "db.from is not a function"
+                // ✅ Matches db.airtime_transactions in your db.js
                 const { error: insertError } = await db.airtime_transactions().insert([{
                     user_id: userId,
                     amount: cleanAmount,
@@ -88,10 +88,11 @@ class MpesaService {
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
             
-            // ✅ Log to callback table using your specific helper syntax
-            const { error: logError } = await db.mpesa_callback_logs().insert([{
+            // ✅ FIX: Changed mpesa_callback_logs() to mpesa_logs() 
+            // This matches the mapping in your provided db.js file
+            const { error: logError } = await db.mpesa_logs().insert([{
                 checkout_request_id: checkoutId,
-                merchant_request_id: cb.MerchantRequestID,
+                merchant_request_id: cb.Merchant_Request_ID || null,
                 raw_payload: rawData,
                 ip_address: ipAddress,
                 metadata: { processed_at: new Date().toISOString() }
@@ -108,7 +109,7 @@ class MpesaService {
             }
 
             if (checkoutId) {
-                // Ensure we don't try to update before the record is fully created in Stage 1
+                // Ensure Stage 1 insert has finished in Supabase
                 await new Promise(res => setTimeout(res, 2000));
 
                 const { data, error } = await db.airtime_transactions()
