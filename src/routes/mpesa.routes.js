@@ -21,7 +21,9 @@ const paymentLimiter = rateLimit({
         error: "Too many payment attempts. Please wait 5 minutes before trying again." 
     },
     standardHeaders: true, 
-    legacyHeaders: false, 
+    legacyHeaders: false,
+    // On Render, we must use the X-Forwarded-For header to get the real client IP
+    keyGenerator: (req) => req.headers['x-forwarded-for'] || req.ip,
 });
 
 /**

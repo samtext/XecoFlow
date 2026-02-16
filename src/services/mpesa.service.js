@@ -8,17 +8,23 @@ class MpesaService {
     async getAccessToken() {
         try {
             const auth = mpesaConfig.getBasicAuthToken();
+            // .trim() on the auth token ensures no hidden characters break the header
             const response = await axios.get(`${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`, { 
                 headers: { 
-                    // .trim() ensures no hidden newlines from Render Env Vars cause a 401
                     Authorization: `Basic ${auth.trim()}`,
                     "Content-Type": "application/json" 
                 } 
             });
+            
+            if (!response.data.access_token) {
+                throw new Error("Access token missing in Safaricom response");
+            }
+
             return response.data.access_token;
         } catch (error) {
-            console.error("❌ Auth Error:", error.response?.data || error.message);
-            throw new Error("M-Pesa authentication failed. Check Consumer Key/Secret.");
+            const errorData = error.response?.data || error.message;
+            console.error("❌ Auth Error Details:", JSON.stringify(errorData, null, 2));
+            throw new Error("M-Pesa authentication failed. Verify Consumer Key/Secret on Safaricom Portal.");
         }
     }
 
@@ -29,7 +35,7 @@ class MpesaService {
     async registerC2Bv2() {
         try {
             const accessToken = await this.getAccessToken();
-            // Using /v1/ as it is the standard stable endpoint for URL registration
+            // Standard stable v1 endpoint for URL registration
             const url = `${mpesaConfig.baseUrl}/mpesa/c2b/v1/registerurl`;
 
             const payload = {
@@ -42,7 +48,7 @@ class MpesaService {
             console.log("📡 [C2B_REG]: Registering URLs with Safaricom...");
             const response = await axios.post(url, payload, {
                 headers: { 
-                    Authorization: `Bearer ${accessToken}`,
+                    Authorization: `Bearer ${accessToken.trim()}`,
                     "Content-Type": "application/json"
                 }
             });
@@ -84,7 +90,7 @@ class MpesaService {
             const response = await axios.post(
                 `${mpesaConfig.baseUrl}${mpesaConfig.stkPushEndpoint}`,
                 payload,
-                { headers: { Authorization: `Bearer ${accessToken}` } }
+                { headers: { Authorization: `Bearer ${accessToken.trim()}` } }
             );
 
             if (response.data.ResponseCode === "0") {

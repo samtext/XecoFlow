@@ -7,6 +7,13 @@ import apiRoutes from './routes/apiRoutes.js'; // 1. Added the new API data rout
 const app = express();
 
 /**
+ * 🛡️ PROXY TRUST (CRITICAL FOR RENDER)
+ * Tells Express to trust the X-Forwarded-For header sent by Render's proxy.
+ * This fixes the "ValidationError" in your logs and ensures rate limiting works.
+ */
+app.set('trust proxy', 1);
+
+/**
  * Middleware: MUST be before routes
  */
 app.use(cors({
@@ -38,7 +45,8 @@ app.use('/api/v1', apiRoutes);
 // PORT handling for Render
 const PORT = process.env.PORT || 5000;
 const webhookUrl = process.env.MPESA_CALLBACK_URL;
-const mpesaEnv = process.env.MPESA_ENVIRONMENT || 'sandbox';
+// Fixed to default to production for your specific use case
+const mpesaEnv = process.env.MPESA_ENVIRONMENT || 'production';
 
 // Start Server
 app.listen(PORT, '0.0.0.0', () => {
@@ -53,10 +61,10 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`=========================================\n`);
     
     if (!webhookUrl) {
-        console.error("❌ CRITICAL: MPESA_CALLBACK_URL is not defined!");
+        console.warn("⚠️ WARNING: MPESA_CALLBACK_URL is not defined in Environment Variables!");
     }
 
     if (!process.env.MPESA_CONSUMER_KEY || !process.env.MPESA_CONSUMER_SECRET) {
-        console.error("❌ MISSING CREDENTIALS: Check Render settings.");
+        console.error("❌ CRITICAL MISSING CREDENTIALS: Check Render Environment settings.");
     }
 });
