@@ -9,6 +9,9 @@ const AIRTIME_RULES = {
     MAX_PURCHASE_AMOUNT_KES: 10000,           // 10,000 KES limit
     DAILY_LIMIT_PER_MSISDN_KES: 15000,        // Anti-Fraud limit
     ALLOW_DECIMAL_PURCHASES_KES: false,       // Only whole numbers
+    // Legacy support for paymentController.js
+    MIN_AMOUNT: 5,
+    MAX_AMOUNT: 10000
 };
 
 const PAYMENT_RULES = {
@@ -21,26 +24,21 @@ const PAYMENT_RULES = {
 const SUPPORT_CONFIG = {
     BUSINESS_NAME: "XECO FLOW",
     CONTACT_WHATSAPP: "2547XXXXXXXX",
-    SUPPORT_EMAIL: "help@xecoflow.com"
+    SUPPORT_EMAIL: "help@xecoflow.com",
+    HELP_LINE: "2547XXXXXXXX" // Added to satisfy potential controller requirements
 };
 
 const TIME_STANDARDS = {
     DISPLAY_TIMEZONE: "Africa/Nairobi",
+    TIMEZONE: "Africa/Nairobi", // Aliased for compatibility with paymentController
     RECONCILIATION_GATE_TIME: "23:57:00"
 };
 
-// ... Define other objects (TX_STATES, SYSTEM_TIMINGS, etc.) here if they exist ...
-
 // 2. Export everything together ONCE at the bottom
+// This matches the "Named Export" style used in your imports
 export { 
     AIRTIME_RULES, 
     PAYMENT_RULES, 
     SUPPORT_CONFIG, 
-    TIME_STANDARDS,
-    // Add other constants here as you define them above
-    /* SYSTEM_TIMINGS, 
-    TX_STATES, 
-    PROVIDER_RULES, 
-    MPESA_STATUS_CODES 
-    */
+    TIME_STANDARDS
 };

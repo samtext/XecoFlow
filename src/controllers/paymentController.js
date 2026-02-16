@@ -18,6 +18,7 @@ export const initiatePayment = async (req, res) => {
         console.log(`📱 Phone Number: ${phoneNumber}`);
         console.log(`💰 Amount: Ksh ${amount}`);
         console.log(`👤 User ID: ${userId}`);
+        console.log(`📦 Package ID: ${packageId || 'N/A'}`);
         console.log(`=========================================\n`);
 
         // 3. Validation
@@ -55,22 +56,27 @@ export const initiatePayment = async (req, res) => {
         console.log(`⏳ [PROCESSING]: Requesting STK Push from Safaricom...`);
         const response = await mpesaService.initiateSTKPush(phoneNumber, amount, userId);
         
-        // 5. Success Logging
-        console.log(`✅ [SUCCESS]: Safaricom Accepted Request`);
-        console.log(`🆔 CheckoutRequestID: ${response.CheckoutRequestID || 'N/A'}`);
-        console.log(`📝 Response Message: ${response.CustomerMessage || 'Sent'}`);
+        // 5. Check if service returned an error instead of throwing
+        if (response.success === false) {
+            console.error(`❌ [SERVICE_REJECTION]: ${response.error}`);
+            return res.status(400).json(response);
+        }
 
-        // 6. Send success back to React
+        // 6. Success Logging
+        console.log(`✅ [SUCCESS]: Safaricom Accepted Request`);
+        console.log(`🆔 CheckoutRequestID: ${response.checkoutRequestId || 'N/A'}`);
+
+        // 7. Send success back to React
         return res.status(200).json(response);
 
     } catch (error) {
-        // 7. Error Logging
+        // 8. Error Logging
         console.error(`\n❌ [STK_PUSH_CONTROLLER_ERROR]:`);
         console.error(`👉 Message: ${error.message}`);
         console.error(`=========================================\n`);
         
         return res.status(500).json({ 
-            success: false,   
+            success: false,   
             error: error.message 
         });
     }

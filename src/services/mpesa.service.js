@@ -9,7 +9,10 @@ class MpesaService {
         try {
             const auth = mpesaConfig.getBasicAuthToken();
             const response = await axios.get(`${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`, { 
-                headers: { Authorization: `Basic ${auth}` } 
+                headers: { 
+                    Authorization: `Basic ${auth}`,
+                    "Content-Type": "application/json" 
+                } 
             });
             return response.data.access_token;
         } catch (error) {
@@ -25,19 +28,22 @@ class MpesaService {
     async registerC2Bv2() {
         try {
             const accessToken = await this.getAccessToken();
-            // Ensure the URL correctly points to v1 or v2 as per your Daraja App settings
+            // Using /v1/ as it is the standard stable endpoint for URL registration
             const url = `${mpesaConfig.baseUrl}/mpesa/c2b/v1/registerurl`;
 
             const payload = {
                 ShortCode: mpesaConfig.shortCode,
-                ResponseType: "Completed", // Safaricom will finalize the payment even if your server is down
+                ResponseType: "Completed", 
                 ConfirmationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-confirmation",
                 ValidationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-validation"
             };
 
             console.log("📡 [C2B_REG]: Registering URLs with Safaricom...");
             const response = await axios.post(url, payload, {
-                headers: { Authorization: `Bearer ${accessToken}` }
+                headers: { 
+                    Authorization: `Bearer ${accessToken}`,
+                    "Content-Type": "application/json"
+                }
             });
 
             return response.data;
@@ -83,7 +89,6 @@ class MpesaService {
             if (response.data.ResponseCode === "0") {
                 const checkoutId = response.data.CheckoutRequestID;
                 
-                // Save Pending Transaction
                 const { error: insertError } = await db.airtime_transactions()
                     .insert([{
                         user_id: userId,
@@ -114,7 +119,7 @@ class MpesaService {
             const checkoutId = cb.CheckoutRequestID;
             const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
 
-            // 1. Audit Log
+            // 1. Log receipt details for audit
             await db.mpesa_callback_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
@@ -130,9 +135,8 @@ class MpesaService {
                 receipt = items.find(item => item.Name === 'MpesaReceiptNumber')?.Value;
             }
 
-            // 3. Finalize airtime_transactions
+            // 3. Finalize transaction with a small delay for DB consistency
             if (checkoutId) {
-                // Short delay to ensure the initial PENDING record has finished saving
                 await new Promise(res => setTimeout(res, 2000));
 
                 const { error } = await db.airtime_transactions()
@@ -152,14 +156,10 @@ class MpesaService {
         }
     }
 
-    /**
-     * 💰 LANE 2: HANDLE MANUAL (C2B) CONFIRMATION
-     */
     async handleC2BConfirmation(c2bData) {
         try {
             const { TransID, TransAmount, MSISDN, BillRefNumber } = c2bData;
             
-            // 1. Log manual payment
             await db.mpesa_callback_logs().insert([{
                 checkout_request_id: TransID,
                 raw_payload: c2bData,
@@ -167,7 +167,6 @@ class MpesaService {
                 metadata: { type: 'MANUAL_TILL_PAYMENT', account: BillRefNumber }
             }]);
 
-            // 2. Create success record
             const { error: insertError } = await db.airtime_transactions().insert([{
                 user_id: 'C2B_WALK_IN',
                 amount: Math.round(Number(TransAmount)),
@@ -187,6 +186,11 @@ class MpesaService {
     }
 }
 
-// 🛡️ Named export for specific functions and default export for the service instance
-export const registerC2Bv2 = () => new MpesaService().registerC2Bv2();
-export default new MpesaService();
+// 🛡️ Instance for use throughout the app
+const mpesaService = new MpesaService();
+
+// Named export for the specific registration function
+export const registerC2Bv2 = () => mpesaService.registerC2Bv2();
+
+// Default export for the class instance
+export default mpesaService;
