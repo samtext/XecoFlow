@@ -101,7 +101,7 @@ export const PROVIDER_CONFIG_AGGREGATORS = Object.freeze({
         SMS: "/sms",          //statum sms endpoint
         },
 
-        SUCCESS_CODE: "200",    // The specific success indicator in their response body
+        SUCCESS_CODE: 200,    // The specific success indicator in their response body
         RESPONSE_KEY: "status" // The key we look for in the JSON response to find the code
     },
 

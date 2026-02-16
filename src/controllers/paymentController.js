@@ -1,4 +1,6 @@
 import mpesaService from '../services/mpesa.service.js';
+// ✅ Import rules for security checks
+import { AIRTIME_RULES, TIME_STANDARDS } from '../config/businessRules.js';
 
 /**
  * MANAGER: paymentController
@@ -7,7 +9,8 @@ import mpesaService from '../services/mpesa.service.js';
 export const initiatePayment = async (req, res) => {
     try {
         // 1. Destructure data from the frontend request
-        const { phoneNumber, amount, userId } = req.body;
+        // Added packageId for verification
+        const { phoneNumber, amount, userId, packageId } = req.body;
         
         // 2. ENHANCED LOGGING: This will now definitely show up in Render
         console.log(`\n=========================================`);
@@ -22,6 +25,29 @@ export const initiatePayment = async (req, res) => {
             console.error("❌ [VALIDATION ERROR]: Missing required fields in req.body");
             return res.status(400).json({ 
                 error: "Phone number, amount, and userId are required" 
+            });
+        }
+
+        // --- 🛡️ SECURITY LAYER A: MIDNIGHT RECONCILIATION GATE ---
+        // Prevents transactions during the 3-minute daily cleanup window
+        const now = new Date();
+        const currentTime = now.toLocaleTimeString('en-GB', { 
+            timeZone: TIME_STANDARDS.DISPLAY_TIMEZONE, 
+            hour12: false 
+        });
+
+        if (currentTime >= TIME_STANDARDS.RECONCILIATION_GATE_TIME && currentTime <= "23:59:59") {
+            console.warn(`⚠️ [GATE KEEPER]: Transaction blocked during Midnight Reconciliation (${currentTime})`);
+            return res.status(503).json({ 
+                error: "System maintenance. Please try again in 5 minutes." 
+            });
+        }
+
+        // --- 🛡️ SECURITY LAYER B: GLOBAL LIMITS CHECK ---
+        if (amount < AIRTIME_RULES.MIN_PURCHASE_AMOUNT_KES || amount > AIRTIME_RULES.MAX_PURCHASE_AMOUNT_KES) {
+            console.error(`🚨 [LIMIT ERROR]: User tried to pay Ksh ${amount}`);
+            return res.status(400).json({ 
+                error: `Amount must be between Ksh ${AIRTIME_RULES.MIN_PURCHASE_AMOUNT_KES} and Ksh ${AIRTIME_RULES.MAX_PURCHASE_AMOUNT_KES}` 
             });
         }
 
@@ -44,7 +70,7 @@ export const initiatePayment = async (req, res) => {
         console.error(`=========================================\n`);
         
         return res.status(500).json({ 
-            success: false,
+            success: false,   
             error: error.message 
         });
     }
