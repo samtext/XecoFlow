@@ -10,7 +10,8 @@ class MpesaService {
             const auth = mpesaConfig.getBasicAuthToken();
             const response = await axios.get(`${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`, { 
                 headers: { 
-                    Authorization: `Basic ${auth}`,
+                    // .trim() ensures no hidden newlines from Render Env Vars cause a 401
+                    Authorization: `Basic ${auth.trim()}`,
                     "Content-Type": "application/json" 
                 } 
             });
@@ -189,8 +190,10 @@ class MpesaService {
 // 🛡️ Instance for use throughout the app
 const mpesaService = new MpesaService();
 
-// Named export for the specific registration function
-export const registerC2Bv2 = () => mpesaService.registerC2Bv2();
+// ✅ FIX: Exported as a named function to resolve the SyntaxError in mpesa.routes.js
+export const registerC2Bv2 = async () => {
+    return await mpesaService.registerC2Bv2();
+};
 
 // Default export for the class instance
 export default mpesaService;

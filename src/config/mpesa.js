@@ -21,13 +21,16 @@ const mpesaConfig = {
     stkPushEndpoint: '/mpesa/stkpush/v1/processrequest',
     
     getBasicAuthToken() {
-        return Buffer.from(`${this.consumerKey}:${this.consumerSecret}`).toString('base64');
+        // Double-check trimming here to ensure no malformed auth strings
+        const key = this.consumerKey.trim();
+        const secret = this.consumerSecret.trim();
+        return Buffer.from(`${key}:${secret}`).toString('base64');
     }
 };
 
 /**
  * PRODUCTION PASSWORD GENERATION
- * For Buy Goods: The password MUST be hashed using the Business Shortcode (7450249).
+ * For Buy Goods: The password MUST be hashed using the Business Shortcode.
  */
 export const generateSTKPassword = (timestamp) => {
     const codeToHash = mpesaConfig.shortCode; 
@@ -40,7 +43,7 @@ export const generateSTKPassword = (timestamp) => {
  */
 export const getMpesaTimestamp = () => {
     const now = new Date();
-    // Adjust to EAT (UTC+3)
+    // Adjust to EAT (UTC+3) for Safaricom Production sync
     const eatOffset = 3 * 60 * 60 * 1000;
     const eatDate = new Date(now.getTime() + eatOffset);
     
