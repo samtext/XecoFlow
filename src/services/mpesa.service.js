@@ -31,13 +31,15 @@ class MpesaService {
     /**
      * 🚀 LANE 2: C2B REGISTRATION (ONE-TIME SETUP)
      * Registers your Render URLs with Safaricom
+     * UPDATED: Now uses v2 endpoint with v1 fallback
      */
     async registerC2Bv2() {
         try {
             const accessToken = await this.getAccessToken();
-            // Standard stable v1 endpoint for URL registration
-            const url = `${mpesaConfig.baseUrl}/mpesa/c2b/v1/registerurl`;
-
+            
+            // 🛠️ FIX: Using v2 as the primary endpoint for newer apps
+            const urlV2 = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
+            
             const payload = {
                 ShortCode: mpesaConfig.shortCode,
                 ResponseType: "Completed", 
@@ -45,15 +47,30 @@ class MpesaService {
                 ValidationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-validation"
             };
 
-            console.log("📡 [C2B_REG]: Registering URLs with Safaricom...");
-            const response = await axios.post(url, payload, {
-                headers: { 
-                    Authorization: `Bearer ${accessToken.trim()}`,
-                    "Content-Type": "application/json"
-                }
-            });
+            console.log("📡 [C2B_REG]: Attempting registration via V2 endpoint...");
+            
+            try {
+                const response = await axios.post(urlV2, payload, {
+                    headers: { 
+                        Authorization: `Bearer ${accessToken.trim()}`,
+                        "Content-Type": "application/json"
+                    }
+                });
+                console.log("✅ [C2B_REG]: V2 Success!");
+                return response.data;
+            } catch (v2Error) {
+                console.warn("⚠️ [C2B_REG]: V2 failed, attempting V1 fallback...");
+                const urlV1 = `${mpesaConfig.baseUrl}/mpesa/c2b/v1/registerurl`;
+                const responseV1 = await axios.post(urlV1, payload, {
+                    headers: { 
+                        Authorization: `Bearer ${accessToken.trim()}`,
+                        "Content-Type": "application/json"
+                    }
+                });
+                console.log("✅ [C2B_REG]: V1 Fallback Success!");
+                return responseV1.data;
+            }
 
-            return response.data;
         } catch (error) {
             const errBody = error.response?.data || error.message;
             console.error("❌ C2B Reg Error:", JSON.stringify(errBody, null, 2));

@@ -9,7 +9,8 @@ const app = express();
 /**
  * 🛡️ PROXY TRUST (CRITICAL FOR RENDER)
  * Tells Express to trust the X-Forwarded-For header sent by Render's proxy.
- * This fixes the "ValidationError" in your logs and ensures rate limiting works.
+ * Render uses a single proxy, so we set this to 1.
+ * This ensures req.ip inside paymentController.js and the rate limiter is correct.
  */
 app.set('trust proxy', 1);
 
@@ -34,8 +35,8 @@ app.get('/', (req, res) => {
  * We now have two clear departments:
  */
 
-// Department A: M-Pesa Actions (STK Push & Callback)
-// Access via: /api/v1/mpesa/stkpush
+// Department A: M-Pesa Actions (STK Push, C2B Registration & Callback)
+// Full Path Example: /api/v1/mpesa/setup-c2b-urls
 app.use('/api/v1/mpesa', mpesaRoutes);
 
 // Department B: General Data (Status Polling)
@@ -54,8 +55,7 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 BIG-SYSTEM ENGINE: ONLINE ON PORT ${PORT}`);
     console.log(`🌍 MODE: ${mpesaEnv.toUpperCase()}`);
     
-    // Note: If your mpesa.routes.js handles the callback at '/callback', 
-    // the full path is now: /api/v1/mpesa/callback
+    // Path Calculation
     const fullPath = webhookUrl ? webhookUrl : `http://localhost:${PORT}/api/v1/mpesa/callback`;
     console.log(`📬 LIVE ENDPOINT: ${fullPath}`); 
     console.log(`=========================================\n`);

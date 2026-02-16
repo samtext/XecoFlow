@@ -22,8 +22,14 @@ const paymentLimiter = rateLimit({
     },
     standardHeaders: true, 
     legacyHeaders: false,
-    // On Render, we must use the X-Forwarded-For header to get the real client IP
-    keyGenerator: (req) => req.headers['x-forwarded-for'] || req.ip,
+    // On Render, we extract the first IP from the X-Forwarded-For list
+    keyGenerator: (req) => {
+        const xForwardedFor = req.headers['x-forwarded-for'];
+        if (xForwardedFor) {
+            return xForwardedFor.split(',')[0].trim();
+        }
+        return req.ip;
+    },
 });
 
 /**
@@ -45,7 +51,7 @@ router.post('/callback', handleMpesaCallback);
  */
 router.get('/setup-c2b-urls', async (req, res) => {
     try {
-        console.log("🔗 [SETUP]: Registering C2B URLs with Safaricom...");
+        console.log("🔗 [SETUP]: Registering C2B URLs with Safaricom (V2 with V1 Fallback)...");
         const result = await registerC2Bv2();
         
         res.status(200).json({ 
