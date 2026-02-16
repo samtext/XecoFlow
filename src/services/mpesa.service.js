@@ -53,12 +53,11 @@ class MpesaService {
                 { headers: { Authorization: `Bearer ${accessToken}` } }
             );
 
-            // ✅ STEP 1: If Safaricom accepts the request, we MUST save the pending record
+            // ✅ STEP 1: Recording the PENDING record immediately
             if (response.data.ResponseCode === "0") {
                 const checkoutId = response.data.CheckoutRequestID;
                 console.log(`📡 [DB_SAVE_INIT]: Recording PENDING status for ID: ${checkoutId}`);
                 
-                // Uses the supabaseAdmin mapping in db.js to bypass RLS for Guest users
                 const { data, error: insertError } = await db.airtime_transactions()
                     .insert([{
                         user_id: userId,
@@ -67,18 +66,18 @@ class MpesaService {
                         network: 'SAFARICOM',
                         status: 'PENDING_PAYMENT',
                         idempotency_key: iKey,
-                        checkout_id: checkoutId // Matches the key used in handleCallback
+                        checkout_id: checkoutId 
                     }])
                     .select();
 
                 if (insertError) {
-                    // Critical failure point causing [DB_MISMATCH] later
+                    // This is why [DB_MISMATCH] happens
                     console.error("❌ [DATABASE_REJECTION]:", JSON.stringify(insertError, null, 2));
                     return { success: true, checkoutRequestId: checkoutId, db_warning: "Record not saved" };
                 }
                 
                 if (data && data.length > 0) {
-                    console.log(`✅ [DB_SUCCESS]: Pending record created in airtime_transactions: ${data[0].id}`);
+                    console.log(`✅ [DB_SUCCESS]: Pending record created: ${data[0].id}`);
                 }
             }
 
@@ -106,7 +105,7 @@ class MpesaService {
                 result_desc: cb.ResultDesc || "No description provided"
             };
 
-            // ✅ STEP 2: Log the raw callback evidence
+            // ✅ STEP 2: Log callback for evidence
             const { error: logError } = await db.mpesa_callback_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
@@ -127,12 +126,12 @@ class MpesaService {
             }
 
             if (checkoutId) {
-                // Ensure the initial PENDING record has finished writing
-                await new Promise(res => setTimeout(res, 2000));
+                // Increased delay to ensure DB write completion
+                await new Promise(res => setTimeout(res, 2500));
 
                 console.log(`⏳ [PROCESSING]: Updating airtime_transactions for ${checkoutId}...`);
 
-                // ✅ STEP 3: Find the record created in Step 1 and finalize it
+                // ✅ STEP 3: Updating the record created in Step 1
                 const { data, error } = await db.airtime_transactions()
                     .update({ 
                         status: status,
@@ -140,7 +139,7 @@ class MpesaService {
                         metadata: metadataPayload, 
                         updated_at: new Date().toISOString()
                     })
-                    .eq('checkout_id', checkoutId) // Searches for the ID saved in Step 1
+                    .eq('checkout_id', checkoutId) 
                     .select();
 
                 if (error) {
@@ -151,7 +150,7 @@ class MpesaService {
                 if (data && data.length > 0) {
                     console.log(`✅ [DB_UPDATE]: Transaction finalized for ID: ${data[0].id}`);
                 } else {
-                    // This warning indicates Step 1 failed or column names mismatch
+                    // Mismatch happens if Step 1 failed or checkout_id column is missing
                     console.warn(`⚠️ [DB_MISMATCH]: No pending transaction found for CheckoutID: ${checkoutId}.`);
                 }
             }
