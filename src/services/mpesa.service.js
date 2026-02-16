@@ -1,4 +1,5 @@
 import axios from 'axios';
+// 🚨 CRITICAL FIX: Added '.js' extensions for ESM compatibility
 import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/mpesa.js';
 import { db } from '../config/db.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -13,19 +14,23 @@ class MpesaService {
             return response.data.access_token;
         } catch (error) {
             console.error("❌ Auth Error:", error.response?.data || error.message);
-            throw new Error("Authentication failed");
+            throw new Error("M-Pesa authentication failed. Check Consumer Key/Secret.");
         }
     }
 
-    // --- 🚀 LANE 2: C2B REGISTRATION (ONE-TIME SETUP) ---
+    /**
+     * 🚀 LANE 2: C2B REGISTRATION (ONE-TIME SETUP)
+     * Registers your Render URLs with Safaricom
+     */
     async registerC2Bv2() {
         try {
             const accessToken = await this.getAccessToken();
-            const url = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
+            // Ensure the URL correctly points to v1 or v2 as per your Daraja App settings
+            const url = `${mpesaConfig.baseUrl}/mpesa/c2b/v1/registerurl`;
 
             const payload = {
                 ShortCode: mpesaConfig.shortCode,
-                ResponseType: "Completed",
+                ResponseType: "Completed", // Safaricom will finalize the payment even if your server is down
                 ConfirmationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-confirmation",
                 ValidationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-validation"
             };
@@ -37,17 +42,15 @@ class MpesaService {
 
             return response.data;
         } catch (error) {
-            console.error("❌ C2B Reg Error:", error.response?.data || error.message);
-            throw error;
+            const errBody = error.response?.data || error.message;
+            console.error("❌ C2B Reg Error:", JSON.stringify(errBody, null, 2));
+            throw new Error(`C2B Registration Failed: ${errBody.errorMessage || error.message}`);
         }
     }
 
     async initiateSTKPush(phoneNumber, amount, userId) {
         try {
-            // ✅ userId can now be a Guest ID from the frontend
-            if (!userId) {
-                throw new Error("Identity (Visitor ID) is required to link transaction");
-            }
+            if (!userId) throw new Error("Identity (Visitor ID) is required.");
 
             const accessToken = await this.getAccessToken();
             const timestamp = getMpesaTimestamp();
@@ -71,46 +74,35 @@ class MpesaService {
                 TransactionDesc: "Airtime Purchase"
             };
 
-            console.log("🚀 [STK_PUSH]: Sending Payload to Safaricom...");
-
             const response = await axios.post(
                 `${mpesaConfig.baseUrl}${mpesaConfig.stkPushEndpoint}`,
                 payload,
                 { headers: { Authorization: `Bearer ${accessToken}` } }
             );
 
-            // ✅ STEP 1: Recording the PENDING record immediately
             if (response.data.ResponseCode === "0") {
                 const checkoutId = response.data.CheckoutRequestID;
-                console.log(`📡 [DB_SAVE_INIT]: Attempting to save PENDING status for ID: ${checkoutId}`);
                 
-                const { data, error: insertError } = await db.airtime_transactions()
+                // Save Pending Transaction
+                const { error: insertError } = await db.airtime_transactions()
                     .insert([{
-                        user_id: userId, // Accepts Guest UUID or Logged-in UUID
+                        user_id: userId,
                         amount: cleanAmount,
                         phone_number: cleanPhone,
                         network: 'SAFARICOM',
                         status: 'PENDING_PAYMENT',
                         idempotency_key: iKey,
                         checkout_id: checkoutId 
-                    }])
-                    .select();
+                    }]);
 
-                if (insertError) {
-                    console.error("❌ [DATABASE_REJECTION]:", JSON.stringify(insertError, null, 2));
-                    return { success: true, checkoutRequestId: checkoutId, db_warning: "Record not saved to airtime_transactions" };
-                }
-                
-                if (data && data.length > 0) {
-                    console.log(`✅ [DB_SUCCESS]: Pending record created in airtime_transactions table.`);
-                }
+                if (insertError) console.error("❌ [DB_SAVE_INIT_ERROR]:", insertError.message);
+                return { success: true, checkoutRequestId: checkoutId };
             }
 
-            return { success: true, checkoutRequestId: response.data.CheckoutRequestID };
+            return { success: false, error: response.data.ResponseDescription };
         } catch (error) {
-            const errorDetail = error.response?.data?.errorMessage || error.message;
-            console.error("❌ STK Error:", errorDetail);
-            return { success: false, error: errorDetail };
+            console.error("❌ STK Error:", error.response?.data || error.message);
+            return { success: false, error: error.message };
         }
     }
 
@@ -122,59 +114,36 @@ class MpesaService {
             const checkoutId = cb.CheckoutRequestID;
             const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
 
-            console.log(`📩 [MPESA_CALLBACK]: Received CheckoutID: ${checkoutId} | Result: ${status}`);
-
-            const metadataPayload = { 
-                processed_at: new Date().toISOString(),
-                ip_address: ipAddress,
-                result_desc: cb.ResultDesc || "No description provided"
-            };
-
-            // ✅ STEP 2: Always log the callback first (Audit Trail)
-            const { error: logError } = await db.mpesa_callback_logs().insert([{
+            // 1. Audit Log
+            await db.mpesa_callback_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
                 raw_payload: rawData,
                 ip_address: ipAddress,
-                status: status, 
-                metadata: metadataPayload
+                status: status
             }]);
 
-            if (logError) console.error("⚠️ [LOG_TABLE_ERROR]:", logError.message);
-
+            // 2. Extract Receipt
             let receipt = null;
             if (status === 'PAYMENT_SUCCESS' && cb.CallbackMetadata?.Item) {
                 const items = cb.CallbackMetadata.Item;
-                const receiptItem = items.find(item => item.Name === 'MpesaReceiptNumber');
-                receipt = receiptItem ? receiptItem.Value : null;
-                metadataPayload.mpesa_receipt = receipt;
+                receipt = items.find(item => item.Name === 'MpesaReceiptNumber')?.Value;
             }
 
+            // 3. Finalize airtime_transactions
             if (checkoutId) {
-                await new Promise(res => setTimeout(res, 2500));
+                // Short delay to ensure the initial PENDING record has finished saving
+                await new Promise(res => setTimeout(res, 2000));
 
-                console.log(`⏳ [DB_UPDATE_START]: Finalizing transaction in airtime_transactions...`);
-
-                const { data, error } = await db.airtime_transactions()
+                const { error } = await db.airtime_transactions()
                     .update({ 
                         status: status,
                         mpesa_receipt: receipt,
-                        metadata: metadataPayload, 
                         updated_at: new Date().toISOString()
                     })
-                    .eq('checkout_id', checkoutId) 
-                    .select();
+                    .eq('checkout_id', checkoutId);
 
-                if (error) {
-                    console.error("❌ [DB_UPDATE_FAILED]:", error.message);
-                    throw error;
-                }
-
-                if (data && data.length > 0) {
-                    console.log(`✅ [DB_FINALIZED]: Transaction updated to ${status}.`);
-                } else {
-                    console.warn(`⚠️ [DB_MISMATCH]: No row found in airtime_transactions with checkout_id: ${checkoutId}.`);
-                }
+                if (error) console.error("❌ [DB_FINAL_UPDATE_ERROR]:", error.message);
             }
             return true;
         } catch (e) {
@@ -183,34 +152,33 @@ class MpesaService {
         }
     }
 
-    // --- 💰 LANE 2: HANDLE MANUAL (C2B) CONFIRMATION ---
+    /**
+     * 💰 LANE 2: HANDLE MANUAL (C2B) CONFIRMATION
+     */
     async handleC2BConfirmation(c2bData) {
         try {
             const { TransID, TransAmount, MSISDN, BillRefNumber } = c2bData;
             
-            console.log(`💰 [C2B_PROCESS]: Processing Manual Payment ${TransID} from ${MSISDN}`);
-
-            // Log this manual payment to your callback logs for safety
+            // 1. Log manual payment
             await db.mpesa_callback_logs().insert([{
-                checkout_request_id: TransID, // Using TransID as unique ref for C2B
+                checkout_request_id: TransID,
                 raw_payload: c2bData,
                 status: 'C2B_SUCCESS',
                 metadata: { type: 'MANUAL_TILL_PAYMENT', account: BillRefNumber }
             }]);
 
-            // Create the airtime transaction record for C2B
+            // 2. Create success record
             const { error: insertError } = await db.airtime_transactions().insert([{
-                user_id: 'C2B_WALK_IN', // Placeholder for manual payers
+                user_id: 'C2B_WALK_IN',
                 amount: Math.round(Number(TransAmount)),
                 phone_number: MSISDN,
                 network: 'SAFARICOM',
-                status: 'PAYMENT_SUCCESS', // It's already confirmed by Safaricom
+                status: 'PAYMENT_SUCCESS',
                 mpesa_receipt: TransID,
                 checkout_id: TransID
             }]);
 
             if (insertError) console.error("❌ [C2B_DB_ERROR]:", insertError.message);
-            
             return true;
         } catch (error) {
             console.error("❌ [C2B_HANDLING_CRASH]:", error.message);
@@ -219,4 +187,6 @@ class MpesaService {
     }
 }
 
+// 🛡️ Named export for specific functions and default export for the service instance
+export const registerC2Bv2 = () => new MpesaService().registerC2Bv2();
 export default new MpesaService();

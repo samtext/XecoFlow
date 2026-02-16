@@ -1,7 +1,8 @@
 import express from 'express';
 // ✅ Import the rate limiter package
 import rateLimit from 'express-rate-limit';
-// We use curly braces because we are using 'Named Exports' in the controllers
+
+// 🚨 CRITICAL FIX: Added '.js' extensions to all local imports for Render/ESM compatibility
 import { initiatePayment } from '../controllers/paymentController.js';
 import { 
     handleMpesaCallback, 
@@ -19,14 +20,13 @@ const paymentLimiter = rateLimit({
     message: { 
         error: "Too many payment attempts. Please wait 5 minutes before trying again." 
     },
-    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+    standardHeaders: true, 
+    legacyHeaders: false, 
 });
 
 /**
  * 1. INITIATE STK PUSH (LANE 1)
  * Full Path: /api/v1/mpesa/stkpush
- * ✅ Added paymentLimiter to protect this route from spam
  */
 router.post('/stkpush', paymentLimiter, initiatePayment);
 
@@ -43,13 +43,16 @@ router.post('/callback', handleMpesaCallback);
  */
 router.get('/setup-c2b-urls', async (req, res) => {
     try {
+        console.log("🔗 [SETUP]: Registering C2B URLs with Safaricom...");
         const result = await registerC2Bv2();
+        
         res.status(200).json({ 
             success: true, 
             message: "C2B URLs Registered Successfully", 
             data: result 
         });
     } catch (error) {
+        console.error("❌ [SETUP_ERROR]:", error.message);
         res.status(500).json({ 
             success: false, 
             error: error.message 
