@@ -143,35 +143,44 @@ class MpesaService {
 
     async handleCallback(rawData, ipAddress = null) {
         try {
-            // 🔍 DEBUG: Log the exact shape Safaricom is sending
             console.log("📥 [RAW_CALLBACK]:", JSON.stringify(rawData, null, 2));
 
             if (!rawData?.Body?.stkCallback) return false;
 
             const cb = rawData.Body.stkCallback;
             const checkoutId = cb.CheckoutRequestID;
-            const status = String(cb.ResultCode) === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
+            const resultCode = String(cb.ResultCode);
+            const status = resultCode === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
 
-            // 🛠️ TRANSFORM: Extract M-Pesa's weird array and turn it into a flat JSON object
-            const metaItems = cb.CallbackMetadata?.Item || [];
-            const cleanMetadata = this.parseMetadata(metaItems);
+            // 🛠️ LOGIC UPDATE: Handle cases where CallbackMetadata is missing (e.g., ResultCode 1032)
+            let cleanMetadata = {};
+            if (resultCode === "0") {
+                const metaItems = cb.CallbackMetadata?.Item || [];
+                cleanMetadata = this.parseMetadata(metaItems);
+            } else {
+                // Manually populate metadata for failures so the DB field isn't empty
+                cleanMetadata = {
+                    error_code: resultCode,
+                    error_message: cb.ResultDesc || "Transaction failed/cancelled",
+                    logged_at: new Date().toISOString()
+                };
+            }
             
-            // Check if parsing actually worked
             console.log("🛠️ [PARSED_METADATA]:", JSON.stringify(cleanMetadata));
 
             const receipt = cleanMetadata.MpesaReceiptNumber || null;
 
-            // 1. Log receipt details for audit (now including metadata)
+            // 1. Log receipt details for audit
             await db.mpesa_callback_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
                 raw_payload: rawData,
-                metadata: cleanMetadata, // <--- This stores the clean object
+                metadata: cleanMetadata,
                 ip_address: ipAddress,
                 status: status
             }]);
 
-            // 2. Finalize transaction with a small delay for DB consistency
+            // 2. Finalize transaction
             if (checkoutId) {
                 await new Promise(res => setTimeout(res, 2000));
 
@@ -179,7 +188,7 @@ class MpesaService {
                     .update({ 
                         status: status,
                         mpesa_receipt: receipt,
-                        metadata: cleanMetadata, // <--- Updating metadata column here too
+                        metadata: cleanMetadata, 
                         updated_at: new Date().toISOString()
                     })
                     .eq('checkout_id', checkoutId);
@@ -229,13 +238,10 @@ class MpesaService {
     }
 }
 
-// 🛡️ Instance for use throughout the app
 const mpesaService = new MpesaService();
 
-// ✅ FIX: Exported as a named function to resolve the SyntaxError in mpesa.routes.js
 export const registerC2Bv2 = async () => {
     return await mpesaService.registerC2Bv2();
 };
 
-// Default export for the class instance
 export default mpesaService;
