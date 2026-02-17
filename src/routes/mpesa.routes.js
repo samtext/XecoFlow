@@ -18,10 +18,16 @@ const router = express.Router();
  * These are the official Safaricom Daraja Production IP addresses.
  */
 const safaricomIps = [
+    // Original IPs
     '196.201.214.200', '196.201.214.206', '196.201.213.114',
     '196.201.214.207', '196.201.214.208', '196.201.213.44',
     '196.201.212.127', '196.201.212.138', '196.201.212.129',
-    '196.201.212.136', '196.201.212.74', '196.201.212.69'
+    '196.201.212.136', '196.201.212.74', '196.201.212.69',
+    // New 2026 Production Ranges (CIDR blocks)
+    '196.201.214.212', 
+    '196.201.214.0/24', // Covers 196.201.214.1 to 196.201.214.254
+    '196.201.212.0/24', // Covers the .212 range
+    '196.201.213.0/24'  // Covers the .213 range
 ];
 
 const mpesaIpWhitelist = (req, res, next) => {
