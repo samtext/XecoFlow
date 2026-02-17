@@ -19,7 +19,7 @@ const allowedOrigins = [
     'https://your-frontend-domain.netlify.app', // 👈 REPLACE with your real frontend URL
     'https://your-frontend-domain.vercel.app',  // 👈 REPLACE or remove if not needed
     'http://localhost:3000',                     // React default
-    'http://localhost:5173'                      // Vite default
+    'http://localhost:f'                      // Vite default
 ];
 
 const corsOptions = {
