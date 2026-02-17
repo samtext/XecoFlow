@@ -28,9 +28,7 @@ export const handleMpesaCallback = async (req, res) => {
 
         /**
          * 2. IMMEDIATE RESPONSE (CRITICAL)
-         * Safaricom expects a 200 OK within seconds. If we wait for the 
-         * database to finish, Safaricom might timeout and send the 
-         * same callback again, causing duplicate transactions.
+         * Safaricom expects a 200 OK within seconds. 
          */
         res.status(200).json({ 
             ResultCode: 0, 
@@ -40,8 +38,14 @@ export const handleMpesaCallback = async (req, res) => {
         // 3. Background processing (Async)
         console.log(`⏳ [PROCESSING]: Updating database with callback data...`);
         
+        /**
+         * 🛠️ FIX: We extract the raw data and ensure it's a clean object for the service.
+         * If the service expects a specific metadata structure, we ensure req.body is passed cleanly.
+         */
+        const callbackData = req.body;
+
         // Using the service we fixed earlier which now handles the .trim() and DB updates
-        mpesaService.handleCallback(req.body, ipAddress)
+        mpesaService.handleCallback(callbackData, ipAddress)
             .then(() => {
                 console.log(`✅ [DB UPDATE]: Transaction record finalized.`);
             })
@@ -51,8 +55,6 @@ export const handleMpesaCallback = async (req, res) => {
 
     } catch (error) {
         console.error("❌ [CALLBACK_CONTROLLER_CRITICAL_ERROR]:", error.message);
-        // We still send 200 to Safaricom even if our internal logging fails 
-        // to prevent them from retrying an already processed payment.
         if (!res.headersSent) res.status(200).send("OK");
     }
 };
@@ -65,11 +67,6 @@ export const handleC2BValidation = async (req, res) => {
         console.log(`📦 Payload:`, JSON.stringify(req.body, null, 2));
         console.log(`=========================================\n`);
 
-        /**
-         * Safaricom is asking: "Should I allow this manual payment?"
-         * We return ResultCode 0 to accept. 
-         * Note: Validation is synchronous; Safaricom waits for this answer.
-         */
         return res.status(200).json({
             ResultCode: 0,
             ResultDesc: "Accepted"
@@ -97,7 +94,17 @@ export const handleC2BConfirmation = async (req, res) => {
         // 2. Hand off to the service for DB logging
         console.log(`⏳ [PROCESSING]: Processing manual payment in database...`);
         
-        mpesaService.handleC2BConfirmation(req.body)
+        /**
+         * 🛠️ FIX: Structuring the C2B data explicitly to ensure the Service 
+         * picks it up as a proper object for the 'metadata' jsonb column.
+         */
+        const c2bData = {
+            ...req.body,
+            source_ip: ipAddress,
+            received_at: new Date().toISOString()
+        };
+
+        mpesaService.handleC2BConfirmation(c2bData)
             .then(() => {
                 console.log(`✅ [C2B DB UPDATE]: Manual payment record created.`);
             })
