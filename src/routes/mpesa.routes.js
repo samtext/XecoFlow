@@ -13,6 +13,28 @@ import { registerC2Bv2 } from '../services/mpesa.service.js';
 
 const router = express.Router();
 
+/**
+ * 🛡️ SECURITY: SAFARICOM IP WHITELIST
+ * These are the official Safaricom Daraja Production IP addresses.
+ */
+const safaricomIps = [
+    '196.201.214.200', '196.201.214.206', '196.201.213.114',
+    '196.201.214.207', '196.201.214.208', '196.201.213.44',
+    '196.201.212.127', '196.201.212.138', '196.201.212.129',
+    '196.201.212.136', '196.201.212.74', '196.201.212.69'
+];
+
+const mpesaIpWhitelist = (req, res, next) => {
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip;
+
+    // Only enforce in production to allow local/Postman testing in dev
+    if (process.env.NODE_ENV === 'production' && !safaricomIps.includes(clientIp)) {
+        console.warn(`🚨 [SECURITY]: Blocked unauthorized access attempt from IP: ${clientIp}`);
+        return res.status(403).json({ error: "Access Denied: Unauthorized IP" });
+    }
+    next();
+};
+
 // --- 🛡️ SPAM SHIELD CONFIGURATION ---
 const paymentLimiter = rateLimit({
     windowMs: 5 * 60 * 1000, // 5 Minutes window
@@ -22,7 +44,6 @@ const paymentLimiter = rateLimit({
     },
     standardHeaders: true, 
     legacyHeaders: false,
-    // On Render, we extract the first IP from the X-Forwarded-For list
     keyGenerator: (req) => {
         const xForwardedFor = req.headers['x-forwarded-for'];
         if (xForwardedFor) {
@@ -41,13 +62,13 @@ router.post('/stkpush', paymentLimiter, initiatePayment);
 /**
  * 2. MPESA STK CALLBACK ROUTE
  * Full Path: /api/v1/mpesa/callback
+ * Protected: Only Safaricom IPs allowed
  */
-router.post('/callback', handleMpesaCallback);
+router.post('/callback', mpesaIpWhitelist, handleMpesaCallback);
 
 /**
  * 3. C2B REGISTRATION (ONE-TIME SETUP)
  * Full Path: /api/v1/mpesa/setup-c2b-urls
- * Visit this in your browser once to register your Render URL with Safaricom
  */
 router.get('/setup-c2b-urls', async (req, res) => {
     try {
@@ -71,13 +92,15 @@ router.get('/setup-c2b-urls', async (req, res) => {
 /**
  * 4. C2B VALIDATION (LANE 2)
  * Full Path: /api/v1/mpesa/c2b-validation
+ * Protected: Only Safaricom IPs allowed
  */
-router.post('/c2b-validation', handleC2BValidation);
+router.post('/c2b-validation', mpesaIpWhitelist, handleC2BValidation);
 
 /**
  * 5. C2B CONFIRMATION (LANE 2)
  * Full Path: /api/v1/mpesa/c2b-confirmation
+ * Protected: Only Safaricom IPs allowed
  */
-router.post('/c2b-confirmation', handleC2BConfirmation);
+router.post('/c2b-confirmation', mpesaIpWhitelist, handleC2BConfirmation);
 
 export default router;
