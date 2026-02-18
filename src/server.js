@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors'; 
 import mpesaRoutes from './routes/mpesa.routes.js';
 import apiRoutes from './routes/apiRoutes.js'; 
+import authRoutes from './routes/authRoutes.js'; // 👈 Added your new auth routes
 
 const app = express();
 
@@ -55,6 +56,7 @@ app.get('/', (req, res) => {
 /**
  * ROUTES
  */
+app.use('/api/v1/auth', authRoutes);   // 👈 Mounted Auth Routes (Login, Profile, Password)
 app.use('/api/v1/mpesa', mpesaRoutes);
 app.use('/api/v1', apiRoutes);
 
