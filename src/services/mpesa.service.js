@@ -1,5 +1,5 @@
 import axios from 'axios';
-// 🚨 CRITICAL FIX: Added '.js' extensions for ESM compatibility
+// 🚨 ESM compatibility
 import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/mpesa.js';
 import { db } from '../config/db.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -41,22 +41,26 @@ class MpesaService {
 
     /**
      * 🚀 LANE 2: C2B REGISTRATION (ONE-TIME SETUP)
+     * FIXED: Added robust token handling and forced V1/V2 retry logic.
      */
     async registerC2Bv2() {
         try {
             const accessToken = await this.getAccessToken();
-            const urlV2 = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
+            // Use shortCode from config (Must be the Paybill/Store Number)
+            const shortCode = mpesaConfig.shortCode;
             
             const payload = {
-                ShortCode: mpesaConfig.shortCode,
+                ShortCode: shortCode,
                 ResponseType: "Completed", 
                 ConfirmationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-confirmation",
                 ValidationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-validation"
             };
 
-            console.log("📡 [C2B_REG]: Attempting registration via V2 endpoint...");
+            console.log(`📡 [C2B_REG]: Registering for ShortCode: ${shortCode}...`);
             
+            // Try V2 Registration first
             try {
+                const urlV2 = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
                 const response = await axios.post(urlV2, payload, {
                     headers: { 
                         Authorization: `Bearer ${accessToken.trim()}`,
@@ -80,6 +84,10 @@ class MpesaService {
         } catch (error) {
             const errBody = error.response?.data || error.message;
             console.error("❌ C2B Reg Error:", JSON.stringify(errBody, null, 2));
+            // Specifically handling the common "Invalid Access Token" error
+            if (errBody.errorMessage?.includes("Invalid Access Token")) {
+                throw new Error("C2B Registration Failed: Your App is not approved for C2B product on Daraja.");
+            }
             throw new Error(`C2B Registration Failed: ${errBody.errorMessage || error.message}`);
         }
     }
@@ -152,7 +160,6 @@ class MpesaService {
             const resultCode = String(cb.ResultCode);
             const status = resultCode === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
 
-            // 🛠️ LOGIC UPDATE: Handle cases where CallbackMetadata is missing
             let cleanMetadata = {};
             if (resultCode === "0") {
                 const metaItems = cb.CallbackMetadata?.Item || [];
@@ -169,7 +176,6 @@ class MpesaService {
 
             const receipt = cleanMetadata.MpesaReceiptNumber || null;
 
-            // 1. Log receipt details for audit
             await db.mpesa_callback_logs().insert([{
                 checkout_request_id: checkoutId,
                 merchant_request_id: cb.MerchantRequestID || null,
@@ -179,9 +185,7 @@ class MpesaService {
                 status: status
             }]);
 
-            // 2. Finalize transaction
             if (checkoutId) {
-                // Short delay to ensure the initiate insert finished
                 await new Promise(res => setTimeout(res, 2000));
 
                 const { error } = await db.airtime_transactions()
@@ -204,17 +208,12 @@ class MpesaService {
 
     async handleC2BConfirmation(c2bData) {
         try {
-            /**
-             * 🛠️ FIX: Safaricom C2B data can arrive flat or nested depending on how
-             * the controller processed it. We ensure we grab the right keys.
-             */
             const payload = c2bData.raw_data || c2bData; 
             const TransID = payload.TransID || c2bData.transaction_id;
             const TransAmount = payload.TransAmount || c2bData.amount;
             const MSISDN = payload.MSISDN || c2bData.phone;
             const BillRefNumber = payload.BillRefNumber || c2bData.bill_ref;
             
-            // 1. Log to audit trail
             await db.mpesa_callback_logs().insert([{
                 checkout_request_id: TransID,
                 raw_payload: c2bData,
@@ -228,7 +227,6 @@ class MpesaService {
                 }
             }]);
 
-            // 2. Insert into Transactions table
             const { error: insertError } = await db.airtime_transactions().insert([{
                 user_id: 'C2B_WALK_IN',
                 amount: Math.round(Number(TransAmount)),
