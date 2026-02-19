@@ -6,9 +6,18 @@ import { DB_MAPPING } from './systemRules.js';
  * Single source of truth for table access.
  */
 export const db = {
-    // ✅ FIX: Standardizes access to prevent "db.from is not a function" errors
-    // Uses supabaseAdmin as the primary engine for server-side logic
-    from: (tableName) => supabaseAdmin.from(tableName),
+    /**
+     * ✅ FIX: Standardizes access to prevent "db.from is not a function" errors
+     * Uses supabaseAdmin as the primary engine for server-side logic.
+     * Added a safety check to ensure tableName is provided.
+     */
+    from: (tableName) => {
+        if (!tableName) {
+            console.error("❌ DB_ERROR: Table name is undefined in db.from call");
+            return null;
+        }
+        return supabaseAdmin.from(tableName);
+    },
 
     /**
      * ✅ UPDATED: Guest-Ready Transaction Helper

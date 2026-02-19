@@ -152,13 +152,12 @@ class MpesaService {
             const resultCode = String(cb.ResultCode);
             const status = resultCode === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
 
-            // 🛠️ LOGIC UPDATE: Handle cases where CallbackMetadata is missing (e.g., ResultCode 1032)
+            // 🛠️ LOGIC UPDATE: Handle cases where CallbackMetadata is missing
             let cleanMetadata = {};
             if (resultCode === "0") {
                 const metaItems = cb.CallbackMetadata?.Item || [];
                 cleanMetadata = this.parseMetadata(metaItems);
             } else {
-                // Manually populate metadata for failures so the DB field isn't empty
                 cleanMetadata = {
                     error_code: resultCode,
                     error_message: cb.ResultDesc || "Transaction failed/cancelled",
@@ -182,6 +181,7 @@ class MpesaService {
 
             // 2. Finalize transaction
             if (checkoutId) {
+                // Short delay to ensure the initiate insert finished
                 await new Promise(res => setTimeout(res, 2000));
 
                 const { error } = await db.airtime_transactions()
@@ -204,8 +204,17 @@ class MpesaService {
 
     async handleC2BConfirmation(c2bData) {
         try {
-            const { TransID, TransAmount, MSISDN, BillRefNumber } = c2bData;
+            /**
+             * 🛠️ FIX: Safaricom C2B data can arrive flat or nested depending on how
+             * the controller processed it. We ensure we grab the right keys.
+             */
+            const payload = c2bData.raw_data || c2bData; 
+            const TransID = payload.TransID || c2bData.transaction_id;
+            const TransAmount = payload.TransAmount || c2bData.amount;
+            const MSISDN = payload.MSISDN || c2bData.phone;
+            const BillRefNumber = payload.BillRefNumber || c2bData.bill_ref;
             
+            // 1. Log to audit trail
             await db.mpesa_callback_logs().insert([{
                 checkout_request_id: TransID,
                 raw_payload: c2bData,
@@ -214,10 +223,12 @@ class MpesaService {
                     type: 'MANUAL_TILL_PAYMENT', 
                     account: BillRefNumber,
                     phone: MSISDN,
-                    amount: TransAmount
+                    amount: TransAmount,
+                    source_ip: c2bData.source_ip || 'unknown'
                 }
             }]);
 
+            // 2. Insert into Transactions table
             const { error: insertError } = await db.airtime_transactions().insert([{
                 user_id: 'C2B_WALK_IN',
                 amount: Math.round(Number(TransAmount)),
@@ -226,7 +237,11 @@ class MpesaService {
                 status: 'PAYMENT_SUCCESS',
                 mpesa_receipt: TransID,
                 checkout_id: TransID,
-                metadata: { source: 'C2B_CONFIRMATION', original_ref: BillRefNumber }
+                metadata: { 
+                    source: 'C2B_CONFIRMATION', 
+                    original_ref: BillRefNumber,
+                    full_name: c2bData.full_name || 'N/A'
+                }
             }]);
 
             if (insertError) console.error("❌ [C2B_DB_ERROR]:", insertError.message);
