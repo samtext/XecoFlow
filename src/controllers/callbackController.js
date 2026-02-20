@@ -2,6 +2,7 @@ import mpesaService from '../services/mpesa.service.js';
 
 /**
  * MANAGER: callbackController
+ * Optimized for M-Pesa C2B v2 & STK Push
  */
 
 // Helper to get the most accurate IP on Render (Checks the first IP in the forwarded chain)
@@ -17,30 +18,33 @@ const getClientIp = (req) => {
 export const handleMpesaCallback = async (req, res) => {
     try {
         const ipAddress = getClientIp(req);
-        console.log(`📥 [STK CALLBACK]: From ${ipAddress}`);
+        console.log(`📥 [STK CALLBACK]: Received from ${ipAddress}`);
 
-        // 1. Send response immediately
+        // 1. Send response immediately to M-Pesa (prevents retries)
         res.status(200).json({ ResultCode: 0, ResultDesc: "Success" });
 
-        // 2. Background process
+        // 2. Process in background
         mpesaService.handleCallback(req.body, ipAddress)
             .catch(err => console.error("❌ [STK DB ERROR]:", err.message));
 
     } catch (error) {
         console.error("❌ [STK_CRITICAL_ERROR]:", error.message);
-        if (!res.headersSent) res.status(200).send("OK");
+        if (!res.headersSent) res.status(200).json({ ResultCode: 1, ResultDesc: "Internal Error" });
     }
 };
 
 // --- 🛡️ LANE 2: C2B VALIDATION (The "Gatekeeper") ---
 export const handleC2BValidation = async (req, res) => {
     try {
-        console.log(`🔍 [VALIDATION]: Received from ${getClientIp(req)}`);
-        console.log(`📦 Data:`, JSON.stringify(req.body));
+        const ipAddress = getClientIp(req);
+        // C2B v2 Payload destructuring
+        const { TransID, MSISDN, TransAmount, BillRefNumber } = req.body;
+        
+        console.log(`🔍 [V2_VALIDATION]: ID ${TransID} | From ${MSISDN} | Amount ${TransAmount} | IP ${ipAddress}`);
 
         /**
-         * 🚨 CRITICAL: Safaricom will NOT call Confirmation if this 
-         * doesn't return ResultCode 0 within ~5 seconds.
+         * 🚨 CRITICAL: Validation must return ResultCode 0 for Safaricom to complete the payment.
+         * If you want to reject (e.g., wrong BillRef), return ResultCode 1.
          */
         return res.status(200).json({
             "ResultCode": 0,
@@ -48,7 +52,7 @@ export const handleC2BValidation = async (req, res) => {
         });
     } catch (error) {
         console.error("❌ [C2B_VAL_ERROR]:", error.message);
-        // Default to Accept so you don't lose money if your code bugs out
+        // Always accept by default in case of code error to avoid blocking real payments
         return res.status(200).json({ "ResultCode": 0, "ResultDesc": "Accepted" });
     }
 };
@@ -57,30 +61,37 @@ export const handleC2BValidation = async (req, res) => {
 export const handleC2BConfirmation = async (req, res) => {
     try {
         const ipAddress = getClientIp(req);
-        console.log(`💰 [CONFIRMATION]: Payment received from ${ipAddress}`);
+        
+        /**
+         * C2B v2 Payloads are flat. Example keys:
+         * TransID, TransTime, TransAmount, BusinessShortCode, BillRefNumber, MSISDN, FirstName, etc.
+         */
+        const { TransID, TransAmount, MSISDN, BillRefNumber, FirstName, MiddleName, LastName } = req.body;
 
-        // 1. Immediate response
+        console.log(`💰 [V2_CONFIRMATION]: Payment ${TransID} | ${TransAmount} KES | From ${MSISDN}`);
+
+        // 1. Immediate acknowledgment to Safaricom
         res.status(200).json({ "ResultCode": 0, "ResultDesc": "Success" });
 
-        // 2. Data Structuring
+        // 2. Data Structuring for Service
         const c2bData = {
-            transaction_id: req.body.TransID,
-            amount: req.body.TransAmount,
-            phone: req.body.MSISDN,
-            bill_ref: req.body.BillRefNumber,
-            full_name: `${req.body.FirstName || ''} ${req.body.MiddleName || ''} ${req.body.LastName || ''}`.trim(),
+            transaction_id: TransID,
+            amount: TransAmount,
+            phone: MSISDN,
+            bill_ref: BillRefNumber,
+            full_name: `${FirstName || ''} ${MiddleName || ''} ${LastName || ''}`.trim() || 'M-PESA CUSTOMER',
             raw_data: req.body,
             source_ip: ipAddress,
             received_at: new Date().toISOString()
         };
 
-        // 3. Process to DB
+        // 3. Background Processing to Database
         mpesaService.handleC2BConfirmation(c2bData)
-            .then(() => console.log(`✅ [C2B DB]: Saved ${c2bData.transaction_id}`))
-            .catch(err => console.error("❌ [C2B DB ERROR]:", err.message));
+            .then(() => console.log(`✅ [V2_C2B_DB]: Saved Transaction ${TransID}`))
+            .catch(err => console.error("❌ [V2_C2B_DB_ERROR]:", err.message));
 
     } catch (error) {
         console.error("❌ [C2B_CONF_ERROR]:", error.message);
-        if (!res.headersSent) res.status(200).send("OK");
+        if (!res.headersSent) res.status(200).json({ "ResultCode": 1, "ResultDesc": "Failed" });
     }
 };

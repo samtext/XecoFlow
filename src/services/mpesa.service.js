@@ -20,7 +20,6 @@ class MpesaService {
     async getAccessToken() {
         try {
             const auth = mpesaConfig.getBasicAuthToken();
-            // Ensure no whitespace in the Basic Auth string
             const response = await axios.get(`${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`, { 
                 headers: { 
                     Authorization: `Basic ${auth.trim()}`,
@@ -41,58 +40,41 @@ class MpesaService {
     }
 
     /**
-     * 🚀 LANE 2: C2B REGISTRATION (ONE-TIME SETUP)
-     * UPDATED: Changed URL path from /mpesa/ to /payments/ to comply with Safaricom security rules.
+     * 🚀 LANE 2: C2B v2 REGISTRATION
+     * Registers your URLs to Safaricom's Daraja 2.0 Gateway.
      */
     async registerC2Bv2() {
         try {
             const accessToken = await this.getAccessToken();
             const shortCode = mpesaConfig.shortCode;
             
+            // C2B v2 expects these specific keys
             const payload = {
                 ShortCode: shortCode,
                 ResponseType: "Completed", 
-                // 🚨 KEY CHANGE: Use 'payments' instead of 'mpesa'
-                ConfirmationURL: "https://xecoflow.onrender.com/api/v1/payments/c2b-confirmation",
-                ValidationURL: "https://xecoflow.onrender.com/api/v1/payments/c2b-validation"
+                ConfirmationURL: "https://xecoflow.onrender.com/api/v1/mpesa/payments/c2b-confirmation",
+                ValidationURL: "https://xecoflow.onrender.com/api/v1/mpesa/payments/c2b-validation"
             };
 
-            console.log(`📡 [C2B_REG]: Attempting registration for ShortCode: ${shortCode}...`);
+            console.log(`📡 [C2B_V2_REG]: Attempting registration for ShortCode: ${shortCode}...`);
             
-            try {
-                const urlV2 = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
-                const response = await axios.post(urlV2, payload, {
-                    headers: { 
-                        Authorization: `Bearer ${accessToken}`,
-                        "Content-Type": "application/json"
-                    }
-                });
-                console.log("✅ [C2B_REG]: V2 Success!");
-                return response.data;
-            } catch (v2Error) {
-                const v2Data = v2Error.response?.data;
-                if (v2Data?.errorCode === '401.003.01') {
-                    console.error("🚨 [PROD_ERROR]: Your Daraja App is missing the 'C2B' product.");
-                    throw v2Error;
+            const urlV2 = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
+            const response = await axios.post(urlV2, payload, {
+                headers: { 
+                    Authorization: `Bearer ${accessToken}`,
+                    "Content-Type": "application/json"
                 }
+            });
 
-                console.warn("⚠️ [C2B_REG]: V2 failed, attempting V1 fallback...");
-                const urlV1 = `${mpesaConfig.baseUrl}/mpesa/c2b/v1/registerurl`;
-                const responseV1 = await axios.post(urlV1, payload, {
-                    headers: { 
-                        Authorization: `Bearer ${accessToken}`,
-                        "Content-Type": "application/json"
-                    }
-                });
-                console.log("✅ [C2B_REG]: V1 Fallback Success!");
-                return responseV1.data;
-            }
+            console.log("✅ [C2B_V2_REG]: Success!", response.data);
+            return response.data;
+
         } catch (error) {
             const errBody = error.response?.data || error.message;
-            console.error("❌ C2B Reg Error:", JSON.stringify(errBody, null, 2));
+            console.error("❌ C2B v2 Reg Error:", JSON.stringify(errBody, null, 2));
             
             if (errBody.errorCode === '401.003.01') {
-                throw new Error("CRITICAL: C2B Product not found in your App. Please add 'Customer To Business (C2B)' to your app in the Daraja Portal.");
+                throw new Error("CRITICAL: C2B Product not found in your App. Please add 'Customer To Business (C2B)' in the Daraja Portal.");
             }
             throw new Error(`C2B Registration Failed: ${errBody.errorMessage || error.message}`);
         }
@@ -155,103 +137,56 @@ class MpesaService {
         }
     }
 
-    async handleCallback(rawData, ipAddress = null) {
-        try {
-            console.log("📥 [RAW_CALLBACK]:", JSON.stringify(rawData, null, 2));
-
-            if (!rawData?.Body?.stkCallback) return false;
-
-            const cb = rawData.Body.stkCallback;
-            const checkoutId = cb.CheckoutRequestID;
-            const resultCode = String(cb.ResultCode);
-            const status = resultCode === "0" ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
-
-            let cleanMetadata = {};
-            if (resultCode === "0") {
-                const metaItems = cb.CallbackMetadata?.Item || [];
-                cleanMetadata = this.parseMetadata(metaItems);
-            } else {
-                cleanMetadata = {
-                    error_code: resultCode,
-                    error_message: cb.ResultDesc || "Transaction failed/cancelled",
-                    logged_at: new Date().toISOString()
-                };
-            }
-            
-            console.log("🛠️ [PARSED_METADATA]:", JSON.stringify(cleanMetadata));
-
-            const receipt = cleanMetadata.MpesaReceiptNumber || null;
-
-            await db.mpesa_callback_logs().insert([{
-                checkout_request_id: checkoutId,
-                merchant_request_id: cb.MerchantRequestID || null,
-                raw_payload: rawData,
-                metadata: cleanMetadata,
-                ip_address: ipAddress,
-                status: status
-            }]);
-
-            if (checkoutId) {
-                await new Promise(res => setTimeout(res, 2000));
-
-                const { error } = await db.airtime_transactions()
-                    .update({ 
-                        status: status,
-                        mpesa_receipt: receipt,
-                        metadata: cleanMetadata, 
-                        updated_at: new Date().toISOString()
-                    })
-                    .eq('checkout_id', checkoutId);
-
-                if (error) console.error("❌ [DB_FINAL_UPDATE_ERROR]:", error.message);
-            }
-            return true;
-        } catch (e) {
-            console.error("❌ [CALLBACK_CRASH]:", e.message);
-            return false;
-        }
-    }
-
+    /**
+     * 📥 HANDLES C2B v2 CONFIRMATION
+     */
     async handleC2BConfirmation(c2bData) {
         try {
-            const payload = c2bData.raw_data || c2bData; 
-            const TransID = payload.TransID || c2bData.transaction_id;
-            const TransAmount = payload.TransAmount || c2bData.amount;
-            const MSISDN = payload.MSISDN || c2bData.phone;
-            const BillRefNumber = payload.BillRefNumber || c2bData.bill_ref;
-            
+            // C2B v2 sends a flat JSON body
+            const {
+                TransID,
+                TransAmount,
+                MSISDN,
+                BillRefNumber,
+                FirstName,
+                BusinessShortCode
+            } = c2bData;
+
+            console.log(`💰 [V2_C2B_HIT]: ID ${TransID} | Amount ${TransAmount} | From ${MSISDN}`);
+
+            // 1. Log the raw callback
             await db.mpesa_callback_logs().insert([{
                 checkout_request_id: TransID,
                 raw_payload: c2bData,
                 status: 'C2B_SUCCESS',
                 metadata: { 
-                    type: 'MANUAL_TILL_PAYMENT', 
+                    type: 'V2_TILL_PAYMENT', 
                     account: BillRefNumber,
-                    phone: MSISDN,
-                    amount: TransAmount,
-                    source_ip: c2bData.source_ip || 'unknown'
+                    name: FirstName || 'Customer'
                 }
             }]);
 
+            // 2. Create the transaction record
             const { error: insertError } = await db.airtime_transactions().insert([{
                 user_id: 'C2B_WALK_IN',
-                amount: Math.round(Number(TransAmount)),
+                amount: parseFloat(TransAmount),
                 phone_number: MSISDN,
                 network: 'SAFARICOM',
                 status: 'PAYMENT_SUCCESS',
                 mpesa_receipt: TransID,
-                checkout_id: TransID,
+                checkout_id: TransID, // Use TransID as checkout_id for C2B
                 metadata: { 
-                    source: 'C2B_CONFIRMATION', 
-                    original_ref: BillRefNumber,
-                    full_name: c2bData.full_name || 'N/A'
+                    source: 'C2B_V2_CONFIRMATION', 
+                    bill_ref: BillRefNumber,
+                    shortcode: BusinessShortCode
                 }
             }]);
 
-            if (insertError) console.error("❌ [C2B_DB_ERROR]:", insertError.message);
+            if (insertError) throw insertError;
             return true;
+
         } catch (error) {
-            console.error("❌ [C2B_HANDLING_CRASH]:", error.message);
+            console.error("❌ [V2_C2B_CRASH]:", error.message);
             return false;
         }
     }
@@ -259,6 +194,7 @@ class MpesaService {
 
 const mpesaService = new MpesaService();
 
+// Export as individual functions and default class
 export const registerC2Bv2 = async () => {
     return await mpesaService.registerC2Bv2();
 };
