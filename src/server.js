@@ -5,16 +5,29 @@ import mpesaRoutes from './routes/mpesa.routes.js';
 import apiRoutes from './routes/apiRoutes.js'; 
 import authRoutes from './routes/authRoutes.js';
 
+/**
+ * 🛠️ LOG FLUSHER (RENDER FIX)
+ * Overrides console.log to ensure output is written to stdout immediately.
+ */
+const originalLog = console.log;
+console.log = (...args) => {
+    originalLog(...args);
+    if (process.env.NODE_ENV === 'production') {
+        process.stdout.write(''); // Force a flush of the stream
+    }
+};
+
 const app = express();
 
 /**
  * 🛡️ PROXY TRUST (CRITICAL FOR RENDER)
- * Set to true to correctly parse 'x-forwarded-for' headers from Render's load balancer.
+ * Render uses a load balancer; 'trust proxy' must be true to get correct client IPs.
  */
 app.set('trust proxy', true); 
 
 /**
- * 🔐 CORS WHITELIST CONFIGURATION
+ * 🔐 CORS CONFIGURATION
+ * Optimized for Safaricom callbacks which often have no 'origin' header.
  */
 const allowedOrigins = [
     'https://your-frontend-domain.netlify.app', 
@@ -25,10 +38,9 @@ const allowedOrigins = [
 ];
 
 const corsOptions = {
-    origin: function (origin, callback) {
-        // 🚨 SAFARICOM FIX: Safaricom hits your URL from their servers (no origin header).
-        // If !origin is true, we must allow it, or CORS will block the callback.
-        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like Safaricom server-to-server or Postman)
+        if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
             console.error(`🚫 [CORS BLOCKED]: Unauthorized origin: ${origin}`);
@@ -40,55 +52,64 @@ const corsOptions = {
     credentials: true 
 };
 
-/**
- * Middleware
- */
+// Apply CORS before routes
 app.use(cors(corsOptions));
+
+// Body Parser with limit to prevent DOS
 app.use(express.json({ limit: '10kb' })); 
 
-// 🕵️ DEBUG MIDDLEWARE: Logs every request to M-Pesa endpoints
-app.use('/api/v1/mpesa', (req, res, next) => {
-    console.log(`📡 [NETWORK_LOG]: ${req.method} request to ${req.originalUrl} from IP: ${req.ip}`);
+/**
+ * 🕵️ DEBUG MIDDLEWARE
+ * Placed before routes to catch and log every hit.
+ */
+app.use((req, res, next) => {
+    if (req.originalUrl.includes('mpesa')) {
+        console.log(`📡 [NETWORK_LOG]: ${req.method} to ${req.originalUrl} | IP: ${req.ip}`);
+    }
     next();
 });
 
-// Health Check
+// Root Health Check
 app.get('/', (req, res) => {
     res.status(200).send('🚀 BIG-SYSTEM ENGINE: ONLINE');
 });
 
 /**
- * ROUTES
+ * 🛣️ ROUTES
  */
 app.use('/api/v1/auth', authRoutes);   
 app.use('/api/v1/mpesa', mpesaRoutes);
 app.use('/api/v1', apiRoutes);
 
 /**
- * 404 & Error Handling
+ * 404 & Global Error Handling
  */
 app.use((req, res) => {
     res.status(404).json({ error: "Endpoint not found" });
 });
 
-// PORT handling
+app.use((err, req, res, next) => {
+    console.error('❌ [GLOBAL_ERROR]:', err.stack);
+    res.status(500).json({ error: "Internal Server Error" });
+});
+
+/**
+ * 🚀 SERVER INITIALIZATION
+ */
 const PORT = process.env.PORT || 5000;
-const mpesaEnv = process.env.MPESA_ENVIRONMENT || 'production';
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n=========================================`);
     console.log(`🚀 BIG-SYSTEM ENGINE: ONLINE ON PORT ${PORT}`);
-    console.log(`🌍 MODE: ${mpesaEnv.toUpperCase()}`);
-    console.log(`🛡️ TRUST PROXY: ENABLED (Render Optimized)`);
+    console.log(`🌍 ENVIRONMENT: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🛡️ TRUST PROXY: ENABLED`);
     console.log(`=========================================\n`);
     
-    // Logic Guard: Alert if credentials are missing on boot
-    const missing = [];
-    if (!process.env.MPESA_CONSUMER_KEY) missing.push("MPESA_CONSUMER_KEY");
-    if (!process.env.MPESA_CONSUMER_SECRET) missing.push("MPESA_CONSUMER_SECRET");
-    if (!process.env.MPESA_SHORTCODE) missing.push("MPESA_SHORTCODE");
+    // Safety check for production
+    const required = ["MPESA_CONSUMER_KEY", "MPESA_CONSUMER_SECRET", "MPESA_SHORTCODE"];
+    const missing = required.filter(key => !process.env[key]);
 
     if (missing.length > 0) {
-        console.error(`❌ CRITICAL: Missing Env Vars: ${missing.join(', ')}`);
+        console.warn(`⚠️  WARNING: Missing variables: ${missing.join(', ')}`);
     }
 });
