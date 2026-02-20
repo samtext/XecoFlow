@@ -23,7 +23,6 @@ const safaricomIps = [
     '196.201.214.212'
 ];
 
-// Helper to check CIDR ranges (simple version for /24)
 const isIpInRange = (ip, range) => {
     if (!range || !ip) return false;
     if (!range.includes('/')) return ip === range;
@@ -33,7 +32,8 @@ const isIpInRange = (ip, range) => {
 };
 
 const mpesaIpWhitelist = (req, res, next) => {
-    const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip;
+    // 🚨 RENDER FIX: Safaricom's real IP is in x-forwarded-for
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
 
     if (process.env.NODE_ENV === 'production') {
         const isAllowed = safaricomIps.includes(clientIp) || 
@@ -42,14 +42,14 @@ const mpesaIpWhitelist = (req, res, next) => {
                           isIpInRange(clientIp, '196.201.213.0/24');
 
         if (!isAllowed) {
-            console.warn(`🚨 [SECURITY]: Blocked IP: ${clientIp}`);
+            console.warn(`🚨 [SECURITY]: Blocked unauthorized IP: ${clientIp}`);
+            // During testing, you might want to log this and call next() to see if it works
             return res.status(403).json({ error: "Access Denied" });
         }
     }
     next();
 };
 
-// --- 🛡️ SPAM SHIELD ---
 const paymentLimiter = rateLimit({
     windowMs: 5 * 60 * 1000,
     max: 3, 
@@ -59,18 +59,13 @@ const paymentLimiter = rateLimit({
     keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip,
 });
 
-/**
- * ROUTES
- * 🚨 NOTE: 'mpesa' keyword removed from C2B paths to comply with Safaricom security rules.
- */
-
-// 1. STK PUSH (Keep as is since this is internal to your app)
+// 1. STK PUSH
 router.post('/stkpush', paymentLimiter, initiatePayment);
 
-// 2. STK CALLBACK (Keep as is)
+// 2. STK CALLBACK
 router.post('/callback', mpesaIpWhitelist, handleMpesaCallback);
 
-// 3. C2B REGISTRATION (One-time setup)
+// 3. C2B REGISTRATION
 router.get('/setup-c2b-urls', async (req, res) => {
     try {
         console.log("🔗 [SETUP]: Registering C2B URLs...");
@@ -82,12 +77,23 @@ router.get('/setup-c2b-urls', async (req, res) => {
     }
 });
 
+/**
+ * 🚨 CRITICAL: C2B ENDPOINTS
+ * Safaricom hits Validation FIRST. If Validation doesn't return ResultCode 0,
+ * it will NOT hit Confirmation.
+ */
+
 // 4. C2B VALIDATION
-// Changed from /c2b-validation to /payments/c2b-validation to match successful registration
-router.post('/payments/c2b-validation', mpesaIpWhitelist, handleC2BValidation);
+router.post('/payments/c2b-validation', mpesaIpWhitelist, (req, res, next) => {
+    // Log the hit so we know Safaricom reached us
+    console.log("✅ [VALIDATION_HIT]:", req.body);
+    handleC2BValidation(req, res, next);
+});
 
 // 5. C2B CONFIRMATION
-// Changed from /c2b-confirmation to /payments/c2b-confirmation to match successful registration
-router.post('/payments/c2b-confirmation', mpesaIpWhitelist, handleC2BConfirmation);
+router.post('/payments/c2b-confirmation', mpesaIpWhitelist, (req, res, next) => {
+    console.log("✅ [CONFIRMATION_HIT]:", req.body);
+    handleC2BConfirmation(req, res, next);
+});
 
 export default router;
