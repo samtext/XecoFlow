@@ -1,7 +1,7 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 
-// 🚨 ESM Compatibility
+// 🚨 ESM Compatibility Imports
 import { initiatePayment } from '../controllers/paymentController.js';
 import { 
     handleMpesaCallback, 
@@ -13,8 +13,7 @@ import { registerC2Bv2 } from '../services/mpesa.service.js';
 const router = express.Router();
 
 /**
- * 🛡️ SECURITY: SAFARICOM IP WHITELIST (2026 Updated)
- * Note: Keeping the logic here, but we are bypassing it to solve the Render proxy issue.
+ * 🛡️ SECURITY: SAFARICOM IP WHITELIST (Stored for reference)
  */
 const safaricomIps = [
     '196.201.214.200', '196.201.214.206', '196.201.213.114',
@@ -24,62 +23,44 @@ const safaricomIps = [
     '196.201.214.212'
 ];
 
-const isIpInRange = (ip, range) => {
-    if (!range || !ip) return false;
-    if (!range.includes('/')) return ip === range;
-    const [rangeIp] = range.split('/');
-    const subnet = rangeIp.split('.').slice(0, 3).join('.');
-    return ip.startsWith(subnet);
-};
-
 /**
- * 🚦 MIDDLEWARE UPDATED: Whitelist Bypass
- * We are currently calling next() immediately to ensure Safaricom hits reach your controllers.
+ * 🚦 MIDDLEWARE: M-Pesa IP Whitelist
+ * BYPASSED: We log the IP but call next() immediately to fix Render connectivity issues.
  */
 const mpesaIpWhitelist = (req, res, next) => {
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
 
-    // Log the IP so you can see what Safaricom is actually using on Render
-    console.log(`📡 [INCOMING]: Request from IP: ${clientIp}`);
+    // Log the incoming IP so you can see it in Render dashboard
+    console.log(`📡 [INCOMING]: Request from IP: ${clientIp} to ${req.originalUrl}`);
 
-    // Temporarily disabled for troubleshooting
-    /*
-    if (process.env.NODE_ENV === 'production') {
-        const isAllowed = safaricomIps.includes(clientIp) || 
-                          isIpInRange(clientIp, '196.201.214.0/24') ||
-                          isIpInRange(clientIp, '196.201.212.0/24') ||
-                          isIpInRange(clientIp, '196.201.213.0/24');
-
-        if (!isAllowed) {
-            console.warn(`🚨 [SECURITY]: Blocked unauthorized IP: ${clientIp}`);
-            return res.status(403).json({ error: "Access Denied" });
-        }
-    }
-    */
+    // Bypassing whitelist check for production reliability on Render
     next();
 };
 
+/**
+ * ⚡ RATE LIMITER
+ */
 const paymentLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000,
-    max: 3, 
-    message: { error: "Too many attempts. Wait 5 mins." },
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    max: 5, 
+    message: { error: "Too many attempts. Please try again in 5 minutes." },
     standardHeaders: true, 
     legacyHeaders: false,
     keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip,
 });
 
-// 1. STK PUSH
+// --- 1. STK PUSH ---
 router.post('/stkpush', paymentLimiter, initiatePayment);
 
-// 2. STK CALLBACK (Whitelist disabled)
+// --- 2. STK CALLBACK ---
 router.post('/callback', mpesaIpWhitelist, handleMpesaCallback);
 
-// 3. C2B REGISTRATION
+// --- 3. C2B URL REGISTRATION ---
 router.get('/setup-c2b-urls', async (req, res) => {
     try {
-        console.log("🔗 [SETUP]: Registering C2B URLs...");
+        console.log("🔗 [SETUP]: Attempting to register C2B URLs with Safaricom...");
         const result = await registerC2Bv2();
-        res.status(200).json({ success: true, data: result });
+        res.status(200).json({ success: true, message: "URLs Registered Successfully", data: result });
     } catch (error) {
         console.error("❌ [SETUP_ERROR]:", error.message);
         res.status(500).json({ success: false, error: error.message });
@@ -87,18 +68,19 @@ router.get('/setup-c2b-urls', async (req, res) => {
 });
 
 /**
- * 🚨 C2B ENDPOINTS (Whitelist bypassed)
+ * 🚨 C2B TILL ENDPOINTS
+ * Safaricom hits Validation FIRST, then Confirmation.
  */
 
-// 4. C2B VALIDATION
+// --- 4. C2B VALIDATION ---
 router.post('/payments/c2b-validation', mpesaIpWhitelist, (req, res, next) => {
-    console.log("✅ [VALIDATION_HIT]: Request reached the route.");
+    console.log("✅ [VALIDATION_HIT]: M-Pesa is validating a payment...");
     handleC2BValidation(req, res, next);
 });
 
-// 5. C2B CONFIRMATION
+// --- 5. C2B CONFIRMATION ---
 router.post('/payments/c2b-confirmation', mpesaIpWhitelist, (req, res, next) => {
-    console.log("✅ [CONFIRMATION_HIT]: Request reached the route.");
+    console.log("✅ [CONFIRMATION_HIT]: M-Pesa confirmed a payment!");
     handleC2BConfirmation(req, res, next);
 });
 
