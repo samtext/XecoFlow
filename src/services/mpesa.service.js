@@ -20,6 +20,7 @@ class MpesaService {
     async getAccessToken() {
         try {
             const auth = mpesaConfig.getBasicAuthToken();
+            // Ensure no whitespace in the Basic Auth string
             const response = await axios.get(`${mpesaConfig.baseUrl}${mpesaConfig.authEndpoint}`, { 
                 headers: { 
                     Authorization: `Basic ${auth.trim()}`,
@@ -31,7 +32,7 @@ class MpesaService {
                 throw new Error("Access token missing in Safaricom response");
             }
 
-            return response.data.access_token;
+            return response.data.access_token.trim();
         } catch (error) {
             const errorData = error.response?.data || error.message;
             console.error("❌ Auth Error Details:", JSON.stringify(errorData, null, 2));
@@ -41,12 +42,11 @@ class MpesaService {
 
     /**
      * 🚀 LANE 2: C2B REGISTRATION (ONE-TIME SETUP)
-     * FIXED: Added robust token handling and forced V1/V2 retry logic.
+     * FIXED: Added explicit logging for 401.003.01 errors to guide the user.
      */
     async registerC2Bv2() {
         try {
             const accessToken = await this.getAccessToken();
-            // Use shortCode from config (Must be the Paybill/Store Number)
             const shortCode = mpesaConfig.shortCode;
             
             const payload = {
@@ -56,25 +56,32 @@ class MpesaService {
                 ValidationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-validation"
             };
 
-            console.log(`📡 [C2B_REG]: Registering for ShortCode: ${shortCode}...`);
+            console.log(`📡 [C2B_REG]: Attempting registration for ShortCode: ${shortCode}...`);
             
-            // Try V2 Registration first
+            // Try V2 Registration first (Standard for New Apps)
             try {
                 const urlV2 = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
                 const response = await axios.post(urlV2, payload, {
                     headers: { 
-                        Authorization: `Bearer ${accessToken.trim()}`,
+                        Authorization: `Bearer ${accessToken}`,
                         "Content-Type": "application/json"
                     }
                 });
                 console.log("✅ [C2B_REG]: V2 Success!");
                 return response.data;
             } catch (v2Error) {
+                // Check if the error is specifically 'Invalid API call' (Product missing)
+                const v2Data = v2Error.response?.data;
+                if (v2Data?.errorCode === '401.003.01') {
+                    console.error("🚨 [PROD_ERROR]: Your Daraja App is missing the 'C2B' product.");
+                    throw v2Error;
+                }
+
                 console.warn("⚠️ [C2B_REG]: V2 failed, attempting V1 fallback...");
                 const urlV1 = `${mpesaConfig.baseUrl}/mpesa/c2b/v1/registerurl`;
                 const responseV1 = await axios.post(urlV1, payload, {
                     headers: { 
-                        Authorization: `Bearer ${accessToken.trim()}`,
+                        Authorization: `Bearer ${accessToken}`,
                         "Content-Type": "application/json"
                     }
                 });
@@ -84,9 +91,9 @@ class MpesaService {
         } catch (error) {
             const errBody = error.response?.data || error.message;
             console.error("❌ C2B Reg Error:", JSON.stringify(errBody, null, 2));
-            // Specifically handling the common "Invalid Access Token" error
-            if (errBody.errorMessage?.includes("Invalid Access Token")) {
-                throw new Error("C2B Registration Failed: Your App is not approved for C2B product on Daraja.");
+            
+            if (errBody.errorCode === '401.003.01') {
+                throw new Error("CRITICAL: C2B Product not found in your App. Please add 'Customer To Business (C2B)' to your app in the Daraja Portal.");
             }
             throw new Error(`C2B Registration Failed: ${errBody.errorMessage || error.message}`);
         }
@@ -121,7 +128,7 @@ class MpesaService {
             const response = await axios.post(
                 `${mpesaConfig.baseUrl}${mpesaConfig.stkPushEndpoint}`,
                 payload,
-                { headers: { Authorization: `Bearer ${accessToken.trim()}` } }
+                { headers: { Authorization: `Bearer ${accessToken}` } }
             );
 
             if (response.data.ResponseCode === "0") {

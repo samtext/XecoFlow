@@ -12,16 +12,16 @@
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",
-    "axios": "^1.6.0",
+    "axios": "^1.13.5",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
-    "express": "^4.18.2",
+    "express": "^4.22.1",
     "express-rate-limit": "^8.2.1",
     "mysql2": "^3.6.1",
     "node-cron": "^3.0.2",
     "winston": "^3.11.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "nodemon": "^1.0.2"
   }
 }

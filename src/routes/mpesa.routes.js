@@ -25,6 +25,7 @@ const safaricomIps = [
 
 // Helper to check CIDR ranges (simple version for /24)
 const isIpInRange = (ip, range) => {
+    if (!range || !ip) return false;
     if (!range.includes('/')) return ip === range;
     const [rangeIp] = range.split('/');
     const subnet = rangeIp.split('.').slice(0, 3).join('.');
@@ -60,15 +61,16 @@ const paymentLimiter = rateLimit({
 
 /**
  * ROUTES
+ * 🚨 NOTE: 'mpesa' keyword removed from C2B paths to comply with Safaricom security rules.
  */
 
-// 1. STK PUSH
+// 1. STK PUSH (Keep as is since this is internal to your app)
 router.post('/stkpush', paymentLimiter, initiatePayment);
 
-// 2. STK CALLBACK
+// 2. STK CALLBACK (Keep as is)
 router.post('/callback', mpesaIpWhitelist, handleMpesaCallback);
 
-// 3. C2B REGISTRATION (Run this once via browser/Postman after deploying)
+// 3. C2B REGISTRATION (One-time setup)
 router.get('/setup-c2b-urls', async (req, res) => {
     try {
         console.log("🔗 [SETUP]: Registering C2B URLs...");
@@ -81,9 +83,11 @@ router.get('/setup-c2b-urls', async (req, res) => {
 });
 
 // 4. C2B VALIDATION
-router.post('/c2b-validation', mpesaIpWhitelist, handleC2BValidation);
+// Changed from /c2b-validation to /payments/c2b-validation to match successful registration
+router.post('/payments/c2b-validation', mpesaIpWhitelist, handleC2BValidation);
 
 // 5. C2B CONFIRMATION
-router.post('/c2b-confirmation', mpesaIpWhitelist, handleC2BConfirmation);
+// Changed from /c2b-confirmation to /payments/c2b-confirmation to match successful registration
+router.post('/payments/c2b-confirmation', mpesaIpWhitelist, handleC2BConfirmation);
 
 export default router;
