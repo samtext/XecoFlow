@@ -20,7 +20,6 @@ const app = express();
 
 /**
  * 🛡️ PROXY TRUST (CRITICAL FOR RENDER)
- * Tells Express to trust the X-Forwarded-For header from Render's Load Balancer.
  */
 app.set('trust proxy', 1); 
 
@@ -37,7 +36,6 @@ const allowedOrigins = [
 
 const corsOptions = {
     origin: (origin, callback) => {
-        // Allow requests with no origin (crucial for Safaricom/Postman)
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
@@ -55,32 +53,31 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10kb' })); 
 
 /**
- * 🕵️ DEBUG & NETWORK LOGGING
+ * 🕵️ DEBUG & NETWORK LOGGING (Neutral logs)
  */
 app.use((req, res, next) => {
-    if (req.originalUrl.includes('mpesa')) {
+    if (req.originalUrl.includes('gateway')) {
         console.log(`📡 [NETWORK_LOG]: ${req.method} ${req.originalUrl} | IP: ${req.ip}`);
     }
     next();
 });
 
-// 2. Health Check & Diagnostics
+// 2. Health Check
 app.get('/', (req, res) => res.status(200).send('🚀 BIG-SYSTEM ENGINE: ONLINE'));
 
-// Diagnostic route to verify router is alive (checks if /api/v1/mpesa is reachable)
-app.get('/api/v1/mpesa/ping', (req, res) => res.json({ status: "Router is active", timestamp: new Date() }));
+// Diagnostic route - Path must NOT contain "mpesa"
+app.get('/api/v1/gateway/ping', (req, res) => res.json({ status: "Gateway Active", timestamp: new Date() }));
 
 /**
  * 🛣️ ROUTES
- * Registered BEFORE the 404 handler
+ * Use "/gateway" instead of "/mpesa" to satisfy Safaricom's URL validation
  */
 app.use('/api/v1/auth', authRoutes);   
-app.use('/api/v1/mpesa', mpesaRoutes);
+app.use('/api/v1/gateway', mpesaRoutes); // Use this neutral path
 app.use('/api/v1', apiRoutes);
 
 /**
  * 🛑 404 HANDLER
- * Must be AFTER all successful route definitions
  */
 app.use((req, res) => {
     console.warn(`⚠️  [404]: ${req.method} ${req.originalUrl} not found.`);
@@ -104,9 +101,9 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n=========================================`);
     console.log(`🚀 BIG-SYSTEM ENGINE: ONLINE ON PORT ${PORT}`);
     console.log(`🌍 ENVIRONMENT: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`📡 BASE URL: https://xecoflow.onrender.com/api/v1/gateway`);
     console.log(`=========================================\n`);
     
-    // Safety check for production variables
     const required = ["MPESA_CONSUMER_KEY", "MPESA_CONSUMER_SECRET", "MPESA_SHORTCODE"];
     const missing = required.filter(key => !process.env[key]);
 
