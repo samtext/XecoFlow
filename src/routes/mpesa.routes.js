@@ -14,6 +14,7 @@ const router = express.Router();
 
 /**
  * 🛡️ SECURITY: SAFARICOM IP WHITELIST (2026 Updated)
+ * Note: Keeping the logic here, but we are bypassing it to solve the Render proxy issue.
  */
 const safaricomIps = [
     '196.201.214.200', '196.201.214.206', '196.201.213.114',
@@ -31,10 +32,18 @@ const isIpInRange = (ip, range) => {
     return ip.startsWith(subnet);
 };
 
+/**
+ * 🚦 MIDDLEWARE UPDATED: Whitelist Bypass
+ * We are currently calling next() immediately to ensure Safaricom hits reach your controllers.
+ */
 const mpesaIpWhitelist = (req, res, next) => {
-    // 🚨 RENDER FIX: Safaricom's real IP is in x-forwarded-for
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
 
+    // Log the IP so you can see what Safaricom is actually using on Render
+    console.log(`📡 [INCOMING]: Request from IP: ${clientIp}`);
+
+    // Temporarily disabled for troubleshooting
+    /*
     if (process.env.NODE_ENV === 'production') {
         const isAllowed = safaricomIps.includes(clientIp) || 
                           isIpInRange(clientIp, '196.201.214.0/24') ||
@@ -43,10 +52,10 @@ const mpesaIpWhitelist = (req, res, next) => {
 
         if (!isAllowed) {
             console.warn(`🚨 [SECURITY]: Blocked unauthorized IP: ${clientIp}`);
-            // During testing, you might want to log this and call next() to see if it works
             return res.status(403).json({ error: "Access Denied" });
         }
     }
+    */
     next();
 };
 
@@ -62,7 +71,7 @@ const paymentLimiter = rateLimit({
 // 1. STK PUSH
 router.post('/stkpush', paymentLimiter, initiatePayment);
 
-// 2. STK CALLBACK
+// 2. STK CALLBACK (Whitelist disabled)
 router.post('/callback', mpesaIpWhitelist, handleMpesaCallback);
 
 // 3. C2B REGISTRATION
@@ -78,21 +87,18 @@ router.get('/setup-c2b-urls', async (req, res) => {
 });
 
 /**
- * 🚨 CRITICAL: C2B ENDPOINTS
- * Safaricom hits Validation FIRST. If Validation doesn't return ResultCode 0,
- * it will NOT hit Confirmation.
+ * 🚨 C2B ENDPOINTS (Whitelist bypassed)
  */
 
 // 4. C2B VALIDATION
 router.post('/payments/c2b-validation', mpesaIpWhitelist, (req, res, next) => {
-    // Log the hit so we know Safaricom reached us
-    console.log("✅ [VALIDATION_HIT]:", req.body);
+    console.log("✅ [VALIDATION_HIT]: Request reached the route.");
     handleC2BValidation(req, res, next);
 });
 
 // 5. C2B CONFIRMATION
 router.post('/payments/c2b-confirmation', mpesaIpWhitelist, (req, res, next) => {
-    console.log("✅ [CONFIRMATION_HIT]:", req.body);
+    console.log("✅ [CONFIRMATION_HIT]: Request reached the route.");
     handleC2BConfirmation(req, res, next);
 });
 

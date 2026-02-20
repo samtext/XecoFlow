@@ -9,7 +9,7 @@ const app = express();
 
 /**
  * 🛡️ PROXY TRUST (CRITICAL FOR RENDER)
- * Set to true to correctly parse 'x-forwarded-for' headers.
+ * Set to true to correctly parse 'x-forwarded-for' headers from Render's load balancer.
  */
 app.set('trust proxy', true); 
 
@@ -26,8 +26,8 @@ const allowedOrigins = [
 
 const corsOptions = {
     origin: function (origin, callback) {
-        // 🚨 SAFARICOM FIX: Safaricom hits your URL without an 'origin' header.
-        // !origin must be allowed for M-Pesa callbacks to pass CORS.
+        // 🚨 SAFARICOM FIX: Safaricom hits your URL from their servers (no origin header).
+        // If !origin is true, we must allow it, or CORS will block the callback.
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -45,6 +45,12 @@ const corsOptions = {
  */
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10kb' })); 
+
+// 🕵️ DEBUG MIDDLEWARE: Logs every request to M-Pesa endpoints
+app.use('/api/v1/mpesa', (req, res, next) => {
+    console.log(`📡 [NETWORK_LOG]: ${req.method} request to ${req.originalUrl} from IP: ${req.ip}`);
+    next();
+});
 
 // Health Check
 app.get('/', (req, res) => {
@@ -67,16 +73,16 @@ app.use((req, res) => {
 
 // PORT handling
 const PORT = process.env.PORT || 5000;
-const webhookUrl = process.env.MPESA_CALLBACK_URL;
 const mpesaEnv = process.env.MPESA_ENVIRONMENT || 'production';
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n=========================================`);
     console.log(`🚀 BIG-SYSTEM ENGINE: ONLINE ON PORT ${PORT}`);
     console.log(`🌍 MODE: ${mpesaEnv.toUpperCase()}`);
-    console.log(`📬 LIVE WEBHOOK: ${webhookUrl || 'Not Set'}`); 
+    console.log(`🛡️ TRUST PROXY: ENABLED (Render Optimized)`);
     console.log(`=========================================\n`);
     
+    // Logic Guard: Alert if credentials are missing on boot
     const missing = [];
     if (!process.env.MPESA_CONSUMER_KEY) missing.push("MPESA_CONSUMER_KEY");
     if (!process.env.MPESA_CONSUMER_SECRET) missing.push("MPESA_CONSUMER_SECRET");
