@@ -7,7 +7,6 @@ import authRoutes from './routes/authRoutes.js';
 
 /**
  * 🛠️ LOG FLUSHER (RENDER FIX)
- * Overrides console.log to ensure output is written to stdout immediately.
  */
 const originalLog = console.log;
 console.log = (...args) => {
@@ -21,25 +20,24 @@ const app = express();
 
 /**
  * 🛡️ PROXY TRUST (CRITICAL FOR RENDER)
- * Render uses a load balancer; 'trust proxy' must be true to get correct client IPs.
+ * Tells Express to trust the X-Forwarded-For header from Render's Load Balancer.
  */
-app.set('trust proxy', true); 
+app.set('trust proxy', 1); 
 
 /**
  * 🔐 CORS CONFIGURATION
- * Optimized for Safaricom callbacks which often have no 'origin' header.
  */
 const allowedOrigins = [
     'https://your-frontend-domain.netlify.app', 
     'https://your-frontend-domain.vercel.app',  
     'http://localhost:3000',                     
-    'http://localhost:5173',                      
+    'http://localhost:5173',                       
     'http://localhost:5174'
 ];
 
 const corsOptions = {
     origin: (origin, callback) => {
-        // Allow requests with no origin (like Safaricom server-to-server or Postman)
+        // Allow requests with no origin (crucial for Safaricom/Postman)
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
@@ -52,42 +50,46 @@ const corsOptions = {
     credentials: true 
 };
 
-// Apply CORS before routes
+// 1. Global Middleware
 app.use(cors(corsOptions));
-
-// Body Parser with limit to prevent DOS
 app.use(express.json({ limit: '10kb' })); 
 
 /**
- * 🕵️ DEBUG MIDDLEWARE
- * Placed before routes to catch and log every hit.
+ * 🕵️ DEBUG & NETWORK LOGGING
  */
 app.use((req, res, next) => {
     if (req.originalUrl.includes('mpesa')) {
-        console.log(`📡 [NETWORK_LOG]: ${req.method} to ${req.originalUrl} | IP: ${req.ip}`);
+        console.log(`📡 [NETWORK_LOG]: ${req.method} ${req.originalUrl} | IP: ${req.ip}`);
     }
     next();
 });
 
-// Root Health Check
-app.get('/', (req, res) => {
-    res.status(200).send('🚀 BIG-SYSTEM ENGINE: ONLINE');
-});
+// 2. Health Check & Diagnostics
+app.get('/', (req, res) => res.status(200).send('🚀 BIG-SYSTEM ENGINE: ONLINE'));
+
+// Diagnostic route to verify router is alive (checks if /api/v1/mpesa is reachable)
+app.get('/api/v1/mpesa/ping', (req, res) => res.json({ status: "Router is active", timestamp: new Date() }));
 
 /**
  * 🛣️ ROUTES
+ * Registered BEFORE the 404 handler
  */
 app.use('/api/v1/auth', authRoutes);   
 app.use('/api/v1/mpesa', mpesaRoutes);
 app.use('/api/v1', apiRoutes);
 
 /**
- * 404 & Global Error Handling
+ * 🛑 404 HANDLER
+ * Must be AFTER all successful route definitions
  */
 app.use((req, res) => {
+    console.warn(`⚠️  [404]: ${req.method} ${req.originalUrl} not found.`);
     res.status(404).json({ error: "Endpoint not found" });
 });
 
+/**
+ * 🔥 GLOBAL ERROR HANDLER
+ */
 app.use((err, req, res, next) => {
     console.error('❌ [GLOBAL_ERROR]:', err.stack);
     res.status(500).json({ error: "Internal Server Error" });
@@ -102,10 +104,9 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n=========================================`);
     console.log(`🚀 BIG-SYSTEM ENGINE: ONLINE ON PORT ${PORT}`);
     console.log(`🌍 ENVIRONMENT: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🛡️ TRUST PROXY: ENABLED`);
     console.log(`=========================================\n`);
     
-    // Safety check for production
+    // Safety check for production variables
     const required = ["MPESA_CONSUMER_KEY", "MPESA_CONSUMER_SECRET", "MPESA_SHORTCODE"];
     const missing = required.filter(key => !process.env[key]);
 
