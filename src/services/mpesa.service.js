@@ -42,7 +42,7 @@ class MpesaService {
 
     /**
      * 🚀 LANE 2: C2B REGISTRATION (ONE-TIME SETUP)
-     * FIXED: Added explicit logging for 401.003.01 errors to guide the user.
+     * UPDATED: Changed URL path from /mpesa/ to /payments/ to comply with Safaricom security rules.
      */
     async registerC2Bv2() {
         try {
@@ -52,13 +52,13 @@ class MpesaService {
             const payload = {
                 ShortCode: shortCode,
                 ResponseType: "Completed", 
-                ConfirmationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-confirmation",
-                ValidationURL: "https://xecoflow.onrender.com/api/v1/mpesa/c2b-validation"
+                // 🚨 KEY CHANGE: Use 'payments' instead of 'mpesa'
+                ConfirmationURL: "https://xecoflow.onrender.com/api/v1/payments/c2b-confirmation",
+                ValidationURL: "https://xecoflow.onrender.com/api/v1/payments/c2b-validation"
             };
 
             console.log(`📡 [C2B_REG]: Attempting registration for ShortCode: ${shortCode}...`);
             
-            // Try V2 Registration first (Standard for New Apps)
             try {
                 const urlV2 = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
                 const response = await axios.post(urlV2, payload, {
@@ -70,7 +70,6 @@ class MpesaService {
                 console.log("✅ [C2B_REG]: V2 Success!");
                 return response.data;
             } catch (v2Error) {
-                // Check if the error is specifically 'Invalid API call' (Product missing)
                 const v2Data = v2Error.response?.data;
                 if (v2Data?.errorCode === '401.003.01') {
                     console.error("🚨 [PROD_ERROR]: Your Daraja App is missing the 'C2B' product.");
