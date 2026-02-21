@@ -1,17 +1,18 @@
 import axios from 'axios';
 import mpesaConfig from '../config/mpesa.js';
 import { db } from '../config/db.js';
-import { getAccessToken } from './mpesa.auth.js';
+// ✅ FIXED: Import the default instance from mpesa.auth.js
+import mpesaAuth from './mpesa.auth.js'; 
 
 class C2BService {
     async registerC2Bv2() {
         try {
-            const accessToken = await getAccessToken();
+            // ✅ FIXED: Call the method on the instance
+            const accessToken = await mpesaAuth.getAccessToken(); 
             
             const payload = {
                 ShortCode: mpesaConfig.shortCode,
                 ResponseType: "Completed", 
-                // Using neutral paths to satisfy Safaricom firewall
                 ConfirmationURL: "https://xecoflow.onrender.com/api/v1/gateway/hooks/v2-confirmation",
                 ValidationURL: "https://xecoflow.onrender.com/api/v1/gateway/hooks/v2-validation"
             };
@@ -41,7 +42,7 @@ class C2BService {
                 metadata: { type: 'V2_TILL_PAYMENT', name: FirstName || 'Customer' }
             }]);
 
-            // 2. Create Success Transaction
+            // 2. Create Success Transaction record
             const { error: insertError } = await db.airtime_transactions().insert([{
                 user_id: 'C2B_WALK_IN',
                 amount: parseFloat(TransAmount),

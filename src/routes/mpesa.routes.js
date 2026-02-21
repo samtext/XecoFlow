@@ -6,7 +6,7 @@ import {
     handleC2BConfirmation 
 } from '../controllers/callbackController.js';
 
-// ✅ FIXED: Importing from the correct specialized service
+// ✅ FIXED: Using the specialized C2B service instance
 import c2bService from '../services/c2b.service.js';
 
 const router = express.Router();
