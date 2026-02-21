@@ -199,10 +199,10 @@ class StkService {
 
     async logMpesaCallback(payload) {
         try {
-            // This now supports the new UUID id column automatically 
-            // as long as Supabase default is uuid_generate_v4()
+            // ✅ Updated to include 'metadata' column from your latest SQL change
             const { error } = await db.mpesa_callback_logs().insert([{
                 callback_data: payload,
+                metadata: payload, // Added this to match your SQL ADD COLUMN
                 received_at: new Date().toISOString()
             }]);
             
