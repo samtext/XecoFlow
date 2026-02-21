@@ -12,7 +12,7 @@ export const initiatePayment = async (req, res) => {
         // 1. ENHANCED LOGGING
         console.log(`\n=========================================`);
         console.log(`💳 [STK_PUSH_TRIGGER] Initiation`);
-        console.log(`📱 Phone: ${phoneNumber} | 💰 Amt: ${amount}`);
+        console.log(`📱 Phone: ${phoneNumber} | 💰 Amt: ${amount} | 📦 Pkg: ${packageId || 'N/A'}`);
         console.log(`=========================================\n`);
 
         // 2. Validation
@@ -39,12 +39,16 @@ export const initiatePayment = async (req, res) => {
         }
 
         // 3. Call the Specialized STK Service
-        const response = await stkService.initiateSTKPush(phoneNumber, amount, userId);
+        // NOTE: Ensure your stkService.initiateSTKPush uses the following CallBackURL:
+        // https://xecoflow.onrender.com/api/v1/gateway/hooks/stk-callback
+        const response = await stkService.initiateSTKPush(phoneNumber, amount, userId, packageId);
         
         if (response.success === false) {
+            console.error(`❌ [MPESA_REJECTED]:`, response.error);
             return res.status(400).json(response);
         }
 
+        console.log(`✅ [STK_QUEUED]: CheckoutID: ${response.data?.CheckoutRequestID || 'Pending'}`);
         return res.status(200).json(response);
 
     } catch (error) {

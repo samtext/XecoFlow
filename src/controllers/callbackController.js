@@ -13,19 +13,30 @@ const getClientIp = (req) => {
 export const handleMpesaCallback = async (req, res) => {
     try {
         const ipAddress = getClientIp(req);
-        console.log(`📥 [STK CALLBACK]: Received from ${ipAddress}`);
+        
+        // 1. Log the RAW body immediately to see what Safaricom is sending
+        console.log(`📥 [STK CALLBACK RECEIVED] From IP: ${ipAddress}`);
+        console.log('📦 [RAW PAYLOAD]:', JSON.stringify(req.body, null, 2));
 
-        // 1. Immediate response to Safaricom
+        // 2. Immediate response to Safaricom (Crucial to prevent retries)
         res.status(200).json({ ResultCode: 0, ResultDesc: "Success" });
 
-        // 2. Background processing
+        // 3. Background processing
         const { Body } = req.body;
         if (Body?.stkCallback) {
+            const checkoutID = Body.stkCallback.CheckoutRequestID;
+            const resultCode = Body.stkCallback.ResultCode;
+            
+            console.log(`🔍 [PROCESSING]: CheckoutID: ${checkoutID} | Result: ${resultCode === 0 ? 'SUCCESS' : 'FAILED/CANCELLED'}`);
+            
             // Logic moved to specialist service
             await stkService.handleStkResult(Body.stkCallback);
+        } else {
+            console.warn("⚠️ [STK CALLBACK]: Received payload missing Body.stkCallback structure.");
         }
     } catch (error) {
         console.error("❌ [STK_CALLBACK_ERROR]:", error.message);
+        // Note: Do not send error status to Safaricom here as we already sent 200
     }
 };
 
@@ -35,9 +46,10 @@ export const handleMpesaCallback = async (req, res) => {
  */
 export const handleC2BValidation = async (req, res) => {
     try {
-        console.log(`🔍 [C2B_VALIDATION]: ID ${req.body.TransID}`);
+        console.log(`🔍 [C2B_VALIDATION]: ID ${req.body.TransID} | Amount: ${req.body.TransAmount}`);
         return res.status(200).json({ "ResultCode": 0, "ResultDesc": "Accepted" });
     } catch (error) {
+        console.error("❌ [C2B_VALID_ERROR]:", error.message);
         return res.status(200).json({ "ResultCode": 0, "ResultDesc": "Accepted" });
     }
 };
@@ -52,7 +64,9 @@ export const handleC2BConfirmation = async (req, res) => {
         res.status(200).json({ "ResultCode": 0, "ResultDesc": "Success" });
 
         // 2. Logic delegated to specialist service
-        console.log(`💰 [C2B_CONFIRMATION]: ID ${req.body.TransID}`);
+        console.log(`💰 [C2B_CONFIRMATION RECEIVED]: TransID: ${req.body.TransID}`);
+        console.log('📦 [C2B DATA]:', JSON.stringify(req.body, null, 2));
+        
         await c2bService.handleC2BConfirmation(req.body);
     } catch (error) {
         console.error("❌ [C2B_CONF_ERROR]:", error.message);

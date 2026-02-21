@@ -4,7 +4,7 @@ import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/m
 import mpesaAuth from './mpesa.auth.js'; 
 
 class StkService {
-    async initiateSTKPush(phoneNumber, amount, accountRef = "XecoFlow") {
+    async initiateSTKPush(phoneNumber, amount, userId, packageId = "default") {
         try {
             // 1. Get the cached or new token
             const accessToken = await mpesaAuth.getAccessToken();
@@ -23,21 +23,27 @@ class StkService {
                 cleanPhone = `254${cleanPhone.slice(1)}`;
             }
 
+            /**
+             * 🔗 CRITICAL: CALLBACK URL ALIGNMENT
+             * This must match your server.js route: /api/v1/gateway/hooks/stk-callback
+             */
+            const finalCallbackUrl = "https://xecoflow.onrender.com/api/v1/gateway/hooks/stk-callback";
+
             const payload = {
                 BusinessShortCode: mpesaConfig.shortCode, 
                 Password: password,
                 Timestamp: timestamp,
-                TransactionType: "CustomerBuyGoodsOnline", 
+                TransactionType: "CustomerBuyGoodsOnline", // Or "CustomerPayBillOnline" if using Paybill
                 Amount: Math.round(Number(amount)), 
                 PartyA: cleanPhone,
-                PartyB: mpesaConfig.till, 
+                PartyB: mpesaConfig.till || mpesaConfig.shortCode, 
                 PhoneNumber: cleanPhone,
-                CallBackURL: mpesaConfig.callbackUrl,
-                AccountReference: accountRef, 
-                TransactionDesc: "Payment for Goods"
+                CallBackURL: finalCallbackUrl, // ✅ Explicitly set to our live endpoint
+                AccountReference: userId.slice(0, 12), // Safaricom limit is 12 chars
+                TransactionDesc: `Pkg:${packageId}`
             };
 
-            console.log(`🚀 [STK_PUSH]: Sending request to ${cleanPhone}...`);
+            console.log(`🚀 [STK_PUSH]: Sending request to ${cleanPhone} for Amt: ${amount}`);
 
             const response = await axios.post(
                 `${mpesaConfig.baseUrl}${mpesaConfig.stkPushEndpoint}`,
@@ -56,6 +62,30 @@ class StkService {
             const errorData = error.response?.data || error.message;
             console.error("❌ [STK_ERROR]:", JSON.stringify(errorData, null, 2));
             return { success: false, error: errorData };
+        }
+    }
+
+    /**
+     * 📥 HANDLER: handleStkResult
+     * This is called by your controller when Safaricom sends the callback
+     */
+    async handleStkResult(callbackData) {
+        const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = callbackData;
+
+        if (ResultCode === 0) {
+            // Extract metadata (Amount, MpesaReceiptNumber, etc.)
+            const items = CallbackMetadata.Item;
+            const amount = items.find(i => i.Name === 'Amount')?.Value;
+            const receipt = items.find(i => i.Name === 'MpesaReceiptNumber')?.Value;
+            const phone = items.find(i => i.Name === 'PhoneNumber')?.Value;
+
+            console.log(`✅ [PAYMENT_SUCCESS]: Receipt: ${receipt} | Amt: ${amount} | Phone: ${phone}`);
+            
+            // TODO: Update your database here to grant the data/airtime to the user
+            // await User.updateStatus(CheckoutRequestID, 'COMPLETED');
+            
+        } else {
+            console.warn(`❌ [PAYMENT_CANCELLED/FAILED]: ${ResultDesc} (Code: ${ResultCode})`);
         }
     }
 }
