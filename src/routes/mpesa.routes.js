@@ -5,15 +5,13 @@ import {
     handleC2BValidation, 
     handleC2BConfirmation 
 } from '../controllers/callbackController.js';
-
-// ✅ Using the specialized C2B service instance
+import { mpesaIpWhitelist } from '../middlewares/mpesa.middleware.js'; // Ensure correct path
 import c2bService from '../services/c2b.service.js';
 
 const router = express.Router();
 
 /**
  * 🚦 MIDDLEWARE: Network Logger
- * Updated to log the RAW URL to detect path mismatches.
  */
 const networkLogger = (req, res, next) => {
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
@@ -25,24 +23,20 @@ const networkLogger = (req, res, next) => {
     next();
 };
 
-// --- 0. DIAGNOSTIC PING ---
+// 0. DIAGNOSTIC PING
 router.get('/ping', (req, res) => {
     res.status(200).json({ 
         status: "Gateway Active", 
         timestamp: new Date().toISOString(),
-        mount_path: req.baseUrl, // Tells us if it's mounted at /api/v1/gateway
+        mount_path: req.baseUrl,
         note: "Webhook routes are live."
     });
 });
 
-/**
- * 💳 CATEGORY 1: ACTIVE REQUESTS (User-Facing)
- */
+// 💳 CATEGORY 1: ACTIVE REQUESTS (User-Facing)
 router.post('/stkpush', initiatePayment);
 
-/**
- * 🔗 CATEGORY 2: ADMINISTRATION (Dev-Facing)
- */
+// 🔗 CATEGORY 2: ADMINISTRATION (Dev-Facing)
 router.get('/setup-urls', async (req, res) => {
     try {
         console.log("🔗 [SETUP]: Triggering C2B v2 registration...");
@@ -56,13 +50,15 @@ router.get('/setup-urls', async (req, res) => {
 
 /**
  * 📥 CATEGORY 3: WEBHOOKS (Safaricom-Facing)
- * 🔥 FIX: We apply express.json() specifically to these routes to ensure 
- * Safaricom's "application/json" header is parsed correctly regardless of global settings.
+ * We combine:
+ * 1. Specific JSON parsing for webhooks
+ * 2. IP Whitelisting for 2026 Production security
+ * 3. Network logging for easier debugging
  */
-const jsonParser = express.json({ limit: '100kb' });
+const webhookMiddleware = [express.json({ limit: '100kb' }), mpesaIpWhitelist, networkLogger];
 
-router.post('/hooks/stk-callback', jsonParser, networkLogger, handleMpesaCallback);
-router.post('/hooks/v2-validation', jsonParser, networkLogger, handleC2BValidation);
-router.post('/hooks/v2-confirmation', jsonParser, networkLogger, handleC2BConfirmation);
+router.post('/hooks/stk-callback', ...webhookMiddleware, handleMpesaCallback);
+router.post('/hooks/v2-validation', ...webhookMiddleware, handleC2BValidation);
+router.post('/hooks/v2-confirmation', ...webhookMiddleware, handleC2BConfirmation);
 
 export default router;
