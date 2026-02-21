@@ -1,8 +1,9 @@
 import axios from 'axios';
 import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/mpesa.js';
 import mpesaAuth from './mpesa.auth.js'; 
+import { db } from './dbService.js'; // Import the db object
 
-// ✅ Store transactions in memory for frontend to check
+// ✅ Store transactions in memory as backup/fast access
 const transactions = new Map();
 
 class StkService {
@@ -51,20 +52,48 @@ class StkService {
                 }
             );
 
-            // ✅ Store initial transaction status
             const checkoutId = response.data.CheckoutRequestID;
-            transactions.set(checkoutId, {
+            
+            // ✅ Prepare transaction data for database
+            const transactionData = {
+                checkout_request_id: checkoutId,
+                phone_number: cleanPhone,
+                amount: amount,
+                user_id: userId, // This can be a guest ID, which is fine
+                package_id: packageId,
                 status: 'PENDING',
-                phoneNumber: cleanPhone,
-                amount,
-                userId,
-                packageId,
-                timestamp: new Date().toISOString()
+                result_code: null,
+                result_desc: null,
+                mpesa_receipt: null,
+                transaction_date: null,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            };
+
+            // ✅ Save to database using db.airtime_transactions() (Admin client)
+            try {
+                const { data, error } = await db.airtime_transactions()
+                    .insert([transactionData])
+                    .select();
+                
+                if (error) {
+                    console.error("❌ [DB_SAVE_ERROR]:", error);
+                } else {
+                    console.log(`✅ [DB_SAVE]: Transaction saved to database with ID: ${data[0]?.id || checkoutId}`);
+                }
+            } catch (dbError) {
+                console.error("❌ [DB_SAVE_EXCEPTION]:", dbError.message);
+                // Still continue even if DB save fails - we have memory backup
+            }
+
+            // ✅ Store in memory as backup
+            transactions.set(checkoutId, {
+                ...transactionData,
+                status: 'PENDING'
             });
 
             console.log(`✅ [MPESA_SUCCESS]: CheckoutID: ${checkoutId}`);
             
-            // ✅ Return checkout ID to frontend
             return { 
                 success: true, 
                 data: {
@@ -81,7 +110,7 @@ class StkService {
     }
 
     /**
-     * 🔄 HANDLE CALLBACK - Updates transaction status
+     * 🔄 HANDLE CALLBACK - Updates transaction status in database
      */
     async handleStkResult(callbackData) {
         const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = callbackData;
@@ -90,11 +119,17 @@ class StkService {
         console.log(`📊 Result: ${ResultCode} (${ResultDesc})`);
 
         try {
-            // Get existing transaction
+            // Get existing transaction from memory
             const transaction = transactions.get(CheckoutRequestID) || {};
             
+            let updateData = {
+                result_code: ResultCode,
+                result_desc: ResultDesc,
+                updated_at: new Date().toISOString()
+            };
+            
             if (ResultCode === 0) {
-                // Payment successful
+                // Payment successful - extract metadata
                 const metadata = CallbackMetadata?.Item || [];
                 const mpesaReceipt = metadata.find(i => i.Name === 'MpesaReceiptNumber')?.Value;
                 const amount = metadata.find(i => i.Name === 'Amount')?.Value;
@@ -103,48 +138,80 @@ class StkService {
                 
                 console.log(`💰 Payment Successful! Receipt: ${mpesaReceipt}`);
                 
-                // ✅ Update transaction with SUCCESS status
-                transactions.set(CheckoutRequestID, {
-                    ...transaction,
+                // Prepare success data
+                updateData = {
+                    ...updateData,
                     status: 'SUCCESS',
-                    resultCode: ResultCode,
-                    resultDesc: ResultDesc,
-                    mpesaReceipt,
-                    amount,
-                    phoneNumber: phone,
-                    transactionDate,
-                    updatedAt: new Date().toISOString()
-                });
+                    mpesa_receipt: mpesaReceipt,
+                    amount: amount || transaction.amount,
+                    phone_number: phone || transaction.phone_number,
+                    transaction_date: transactionDate
+                };
                 
             } else {
                 // Payment failed
                 console.warn(`❌ Payment Failed/Cancelled: ${ResultDesc}`);
-                
-                // ✅ Update transaction with FAILED status
-                transactions.set(CheckoutRequestID, {
-                    ...transaction,
-                    status: 'FAILED',
-                    resultCode: ResultCode,
-                    resultDesc: ResultDesc,
-                    updatedAt: new Date().toISOString()
-                });
+                updateData.status = 'FAILED';
             }
 
-            console.log(`✅ Transaction ${CheckoutRequestID} status updated to: ${transactions.get(CheckoutRequestID).status}`);
+            // ✅ Update in database using db.airtime_transactions() (Admin client)
+            try {
+                const { error } = await db.airtime_transactions()
+                    .update(updateData)
+                    .eq('checkout_request_id', CheckoutRequestID);
+                
+                if (error) {
+                    console.error("❌ [DB_UPDATE_ERROR]:", error);
+                } else {
+                    console.log(`✅ [DB_UPDATE]: Transaction ${CheckoutRequestID} updated in database`);
+                }
+            } catch (dbError) {
+                console.error("❌ [DB_UPDATE_EXCEPTION]:", dbError.message);
+                // Continue even if DB update fails
+            }
+
+            // ✅ Update in memory
+            transactions.set(CheckoutRequestID, {
+                ...transaction,
+                ...updateData
+            });
+
+            console.log(`✅ Transaction ${CheckoutRequestID} status updated to: ${updateData.status}`);
             return true;
 
         } catch (error) {
-            console.error("❌ [DB_UPDATE_ERROR]:", error.message);
+            console.error("❌ [CALLBACK_HANDLER_ERROR]:", error.message);
             throw error;
         }
     }
 
     /**
-     * 🔍 GET TRANSACTION STATUS - For frontend polling
+     * 🔍 GET TRANSACTION STATUS - From database with memory fallback
      */
     async getTransactionStatus(checkoutRequestId) {
         try {
-            const transaction = transactions.get(checkoutRequestId);
+            // First try to get from database using airtime_transactions() (Admin client)
+            let transaction = null;
+            
+            try {
+                const { data, error } = await db.airtime_transactions()
+                    .select('*')
+                    .eq('checkout_request_id', checkoutRequestId)
+                    .single();
+                
+                if (error) {
+                    console.warn("⚠️ [DB_FETCH_ERROR]:", error.message);
+                } else {
+                    transaction = data;
+                }
+            } catch (dbError) {
+                console.warn("⚠️ [DB_FETCH_EXCEPTION]:", dbError.message);
+            }
+            
+            // If not found in DB, check memory
+            if (!transaction) {
+                transaction = transactions.get(checkoutRequestId);
+            }
             
             if (!transaction) {
                 return {
@@ -156,10 +223,10 @@ class StkService {
 
             return {
                 success: true,
-                status: transaction.status,
+                status: transaction.status || 'PENDING',
                 transaction: {
-                    ...transaction,
-                    checkoutRequestId
+                    checkoutRequestId,
+                    ...transaction
                 }
             };
 
@@ -170,6 +237,25 @@ class StkService {
                 status: 'ERROR',
                 message: error.message
             };
+        }
+    }
+
+    /**
+     * 📝 LOG MPESA CALLBACK - For debugging and audit trail
+     */
+    async logMpesaCallback(callbackData) {
+        try {
+            const { error } = await db.mpesa_callback_logs()
+                .insert([{
+                    callback_data: callbackData,
+                    received_at: new Date().toISOString()
+                }]);
+            
+            if (error) {
+                console.error("❌ [CALLBACK_LOG_ERROR]:", error);
+            }
+        } catch (error) {
+            console.error("❌ [CALLBACK_LOG_EXCEPTION]:", error.message);
         }
     }
 }
