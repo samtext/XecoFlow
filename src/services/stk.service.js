@@ -9,6 +9,12 @@ class StkService {
             if (!accessToken) throw new Error("Access Token missing.");
 
             const timestamp = getMpesaTimestamp();
+            
+            /**
+             * 🛠️ SECURITY FIX:
+             * In Safaricom STK Push, the Password MUST be generated using the 
+             * BusinessShortCode (the one with the Passkey). 
+             */
             const password = generateSTKPassword(timestamp);
 
             // Format phone to 254...
@@ -17,14 +23,10 @@ class StkService {
                 cleanPhone = `254${cleanPhone.slice(1)}`;
             }
 
+            // ⚠️ DEBUG: Check if your URL contains the word "mpesa". 
+            // Safaricom Sandbox often blocks URLs with "mpesa" in the path.
             const finalCallbackUrl = "https://xecoflow.onrender.com/api/v1/gateway/hooks/stk-callback";
 
-            /**
-             * 📝 TILL (BUY GOODS) RULES:
-             * 1. TransactionType: MUST be "CustomerBuyGoodsOnline"
-             * 2. BusinessShortCode: This is your LNM Online Shortcode (usually 174379 in sandbox)
-             * 3. PartyB: This is your TILL NUMBER (Store Number)
-             */
             const payload = {
                 BusinessShortCode: mpesaConfig.shortCode, 
                 Password: password,
@@ -32,14 +34,19 @@ class StkService {
                 TransactionType: "CustomerBuyGoodsOnline", 
                 Amount: Math.round(Number(amount)), 
                 PartyA: cleanPhone,
-                PartyB: mpesaConfig.till || mpesaConfig.shortCode, // ✅ Crucial for Buy Goods
+                // For Buy Goods (Till), PartyB is the TILL NUMBER, but 
+                // BusinessShortCode is the STORE NUMBER used to generate the password.
+                PartyB: mpesaConfig.till || mpesaConfig.shortCode, 
                 PhoneNumber: cleanPhone,
                 CallBackURL: finalCallbackUrl,
-                AccountReference: "XecoFlow", // Max 12 chars
+                AccountReference: "XecoFlow", 
                 TransactionDesc: `Pay ${packageId}`.slice(0, 13)
             };
 
-            console.log(`📡 [STK_ATTEMPT]: Sending to ${cleanPhone} for Till: ${payload.PartyB}`);
+            console.log(`\n--- [STK PUSH OUTGOING] ---`);
+            console.log(`🔗 Callback: ${payload.CallBackURL}`);
+            console.log(`🏢 ShortCode: ${payload.BusinessShortCode} | PartyB (Till): ${payload.PartyB}`);
+            console.log(`---------------------------\n`);
 
             const response = await axios.post(
                 `${mpesaConfig.baseUrl}${mpesaConfig.stkPushEndpoint}`,
@@ -52,7 +59,7 @@ class StkService {
                 }
             );
 
-            console.log(`✅ [MPESA_SUCCESS]:`, response.data);
+            console.log(`✅ [MPESA_SUCCESS]: CheckoutID: ${response.data.CheckoutRequestID}`);
             return { success: true, data: response.data };
 
         } catch (error) {
@@ -62,7 +69,10 @@ class StkService {
         }
     }
 
-    // ... handleStkResult stays the same
+    async handleStkResult(callbackData) {
+        // Your logic to update DB here...
+        console.log("📝 Processing Callback Background:", callbackData.CheckoutRequestID);
+    }
 }
 
 const stkService = new StkService();

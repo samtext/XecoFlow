@@ -13,13 +13,15 @@ const router = express.Router();
 
 /**
  * 🚦 MIDDLEWARE: Network Logger
- * This will show you EXACTLY who is hitting your server in the Render logs.
+ * Updated to log the RAW URL to detect path mismatches.
  */
 const networkLogger = (req, res, next) => {
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
-    console.log(`\n📡 [INCOMING_WEBHOOK]: ${req.method} ${req.originalUrl}`);
+    console.log(`\n-----------------------------------------`);
+    console.log(`📡 [INCOMING]: ${req.method} ${req.originalUrl}`);
     console.log(`🏠 FROM_IP: ${clientIp}`);
-    console.log(`📦 BODY_SIZE: ${JSON.stringify(req.body).length} chars`);
+    console.log(`📦 PAYLOAD: ${req.body ? 'Parsed ✅' : 'Empty ❌'}`);
+    console.log(`-----------------------------------------\n`);
     next();
 };
 
@@ -28,7 +30,8 @@ router.get('/ping', (req, res) => {
     res.status(200).json({ 
         status: "Gateway Active", 
         timestamp: new Date().toISOString(),
-        note: "Webhook routes are live at /hooks/..."
+        mount_path: req.baseUrl, // Tells us if it's mounted at /api/v1/gateway
+        note: "Webhook routes are live."
     });
 });
 
@@ -53,10 +56,13 @@ router.get('/setup-urls', async (req, res) => {
 
 /**
  * 📥 CATEGORY 3: WEBHOOKS (Safaricom-Facing)
- * Explicitly using express.json() here ensures the body is parsed even if global config fails.
+ * 🔥 FIX: We apply express.json() specifically to these routes to ensure 
+ * Safaricom's "application/json" header is parsed correctly regardless of global settings.
  */
-router.post('/hooks/stk-callback', express.json(), networkLogger, handleMpesaCallback);
-router.post('/hooks/v2-validation', express.json(), networkLogger, handleC2BValidation);
-router.post('/hooks/v2-confirmation', express.json(), networkLogger, handleC2BConfirmation);
+const jsonParser = express.json({ limit: '100kb' });
+
+router.post('/hooks/stk-callback', jsonParser, networkLogger, handleMpesaCallback);
+router.post('/hooks/v2-validation', jsonParser, networkLogger, handleC2BValidation);
+router.post('/hooks/v2-confirmation', jsonParser, networkLogger, handleC2BConfirmation);
 
 export default router;

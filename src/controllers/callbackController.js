@@ -8,71 +8,69 @@ const getClientIp = (req) => {
 
 /**
  * 🚀 LANE 1: STK PUSH CALLBACK
- * Matches the route: /hooks/stk-callback
  */
 export const handleMpesaCallback = async (req, res) => {
-    // 1. Immediate response to Safaricom 
-    // We do this first to ensure Safaricom doesn't time out or retry
+    // 1. ACKNOWLEDGE IMMEDIATELY (Crucial for Safaricom)
     res.status(200).json({ ResultCode: 0, ResultDesc: "Success" });
 
+    // 2. Process in the background so we don't hold the connection
     try {
         const ipAddress = getClientIp(req);
-        
-        console.log(`\n📥 [STK CALLBACK RECEIVED] From IP: ${ipAddress}`);
-        
-        // 2. Background processing
         const { Body } = req.body;
-        
-        if (Body?.stkCallback) {
-            const callbackData = Body.stkCallback;
-            const checkoutID = callbackData.CheckoutRequestID;
-            const resultCode = callbackData.ResultCode;
-            
-            console.log(`📦 [PAYLOAD]: ${checkoutID} | Result: ${resultCode}`);
 
-            // Safaricom Sandbox debugging: Log the full metadata if successful
-            if (resultCode === 0) {
-                console.log('✅ [SUCCESS_METADATA]:', JSON.stringify(callbackData.CallbackMetadata, null, 2));
-            }
+        // Diagnostic log: See exactly what arrived
+        console.log(`📥 [STK_WEBHOOK]: From ${ipAddress}`);
 
-            // Wrap service call in a try-catch so it doesn't kill the callback process
-            try {
-                await stkService.handleStkResult(callbackData);
-            } catch (serviceErr) {
-                console.error("❌ [SERVICE_PROCESSING_FAIL]:", serviceErr.message);
-            }
-        } else {
-            console.warn("⚠️ [RAW_BODY_DEBUG]: Received unknown structure:", JSON.stringify(req.body));
+        if (!Body || !Body.stkCallback) {
+            console.warn("⚠️ [INVALID_PAYLOAD]: Payload missing 'Body.stkCallback' structure.");
+            return;
         }
+
+        const callbackData = Body.stkCallback;
+        const { CheckoutRequestID, ResultCode, ResultDesc } = callbackData;
+
+        console.log(`📦 [TRANSACTION]: ID ${CheckoutRequestID} | Status: ${ResultCode} (${ResultDesc})`);
+
+        // Only process success metadata if ResultCode is 0
+        if (ResultCode === 0 && callbackData.CallbackMetadata) {
+            console.log("✅ [SUCCESS_DATA]:", JSON.stringify(callbackData.CallbackMetadata, null, 2));
+        }
+
+        // Delegate to service with its own error boundary
+        try {
+            await stkService.handleStkResult(callbackData);
+        } catch (serviceErr) {
+            console.error("❌ [STK_SERVICE_ERROR]:", serviceErr.message);
+        }
+
     } catch (error) {
-        console.error("❌ [STK_CALLBACK_CRITICAL_ERROR]:", error.message);
+        console.error("❌ [CRITICAL_CALLBACK_FAIL]:", error.message);
     }
 };
 
 /**
  * 🛡️ LANE 2: C2B VALIDATION
- * Matches the route: /hooks/v2-validation
  */
 export const handleC2BValidation = async (req, res) => {
     try {
         console.log(`🔍 [C2B_VALIDATION]: ID ${req.body.TransID} | Amount: ${req.body.TransAmount}`);
+        // Safaricom expects a specific JSON format for validation
         return res.status(200).json({ "ResultCode": 0, "ResultDesc": "Accepted" });
     } catch (error) {
         console.error("❌ [C2B_VALID_ERROR]:", error.message);
-        return res.status(200).json({ "ResultCode": 0, "ResultDesc": "Accepted" });
+        return res.status(200).json({ "ResultCode": 1, "ResultDesc": "Rejected" });
     }
 };
 
 /**
  * 💰 LANE 3: C2B CONFIRMATION
- * Matches the route: /hooks/v2-confirmation
  */
 export const handleC2BConfirmation = async (req, res) => {
-    // 1. Immediate response
+    // Immediate ACK
     res.status(200).json({ "ResultCode": 0, "ResultDesc": "Success" });
 
     try {
-        console.log(`💰 [C2B_CONFIRMATION RECEIVED]: TransID: ${req.body.TransID}`);
+        console.log(`💰 [C2B_CONFIRMATION]: TransID: ${req.body.TransID}`);
         await c2bService.handleC2BConfirmation(req.body);
     } catch (error) {
         console.error("❌ [C2B_CONF_ERROR]:", error.message);
