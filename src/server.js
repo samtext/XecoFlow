@@ -25,30 +25,30 @@ app.set('trust proxy', 1);
 
 /**
  * 🔐 CORS CONFIGURATION
- * Ensure your actual frontend URL (Netlify/Vercel) is added here.
  */
 const allowedOrigins = [
-    'https://xecoflow.onrender.com', // Your backend itself
+    'https://xecoflow.onrender.com',
     'https://your-frontend-domain.netlify.app', 
     'https://your-frontend-domain.vercel.app',  
     'http://localhost:3000',                     
     'http://localhost:5173',                       
-    'http://localhost:5174'
+    'http://localhost:5174' // ✅ Matches your current frontend port
 ];
 
 const corsOptions = {
     origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps or curl)
-        if (!origin || allowedOrigins.includes(origin)) {
+        // ✅ FIX: Improved origin checking to prevent "Connection Failed"
+        if (!origin || allowedOrigins.includes(origin) || origin.startsWith('http://localhost:')) {
             callback(null, true);
         } else {
             console.error(`🚫 [CORS BLOCKED]: Unauthorized origin: ${origin}`);
             callback(new Error('Not allowed by CORS Security Policy'));
         }
     },
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true 
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // ✅ Added OPTIONS for preflight
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    credentials: true,
+    optionsSuccessStatus: 200 // ✅ Required for legacy browser support
 };
 
 // 1. Global Middleware
@@ -68,10 +68,9 @@ app.get('/', (req, res) => res.status(200).send('🚀 BIG-SYSTEM ENGINE: ONLINE'
 
 /**
  * 🛣️ ROUTES
- * CRITICAL: Your STK Push is now at /api/v1/gateway/stkpush
  */
 app.use('/api/v1/auth', authRoutes);   
-app.use('/api/v1/gateway', mpesaRoutes); // M-Pesa logic is behind "/gateway"
+app.use('/api/v1/gateway', mpesaRoutes); 
 app.use('/api/v1', apiRoutes);
 
 /**
