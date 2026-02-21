@@ -1,7 +1,7 @@
 import axios from 'axios';
 import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/mpesa.js';
 import mpesaAuth from './mpesa.auth.js'; 
-import { db } from '../config/db.js'; // ✅ Fixed: Correct path to db.js
+import { db } from '../config/db.js';
 
 // ✅ Store transactions in memory as backup/fast access
 const transactions = new Map();
@@ -59,7 +59,7 @@ class StkService {
                 checkout_request_id: checkoutId,
                 phone_number: cleanPhone,
                 amount: amount,
-                user_id: userId, // This can be a guest ID, which is fine
+                user_id: userId,
                 package_id: packageId,
                 status: 'PENDING',
                 result_code: null,
@@ -70,7 +70,7 @@ class StkService {
                 updated_at: new Date().toISOString()
             };
 
-            // ✅ Save to database using db.airtime_transactions() (Admin client)
+            // ✅ Save to database
             try {
                 const { data, error } = await db.airtime_transactions()
                     .insert([transactionData])
@@ -83,7 +83,6 @@ class StkService {
                 }
             } catch (dbError) {
                 console.error("❌ [DB_SAVE_EXCEPTION]:", dbError.message);
-                // Still continue even if DB save fails - we have memory backup
             }
 
             // ✅ Store in memory as backup
@@ -119,7 +118,6 @@ class StkService {
         console.log(`📊 Result: ${ResultCode} (${ResultDesc})`);
 
         try {
-            // Get existing transaction from memory
             const transaction = transactions.get(CheckoutRequestID) || {};
             
             let updateData = {
@@ -129,7 +127,6 @@ class StkService {
             };
             
             if (ResultCode === 0) {
-                // Payment successful - extract metadata
                 const metadata = CallbackMetadata?.Item || [];
                 const mpesaReceipt = metadata.find(i => i.Name === 'MpesaReceiptNumber')?.Value;
                 const amount = metadata.find(i => i.Name === 'Amount')?.Value;
@@ -138,39 +135,33 @@ class StkService {
                 
                 console.log(`💰 Payment Successful! Receipt: ${mpesaReceipt}`);
                 
-                // Prepare success data
                 updateData = {
                     ...updateData,
                     status: 'SUCCESS',
                     mpesa_receipt: mpesaReceipt,
                     amount: amount || transaction.amount,
                     phone_number: phone || transaction.phone_number,
-                    transaction_date: transactionDate
+                    transaction_date: String(transactionDate)
                 };
                 
             } else {
-                // Payment failed
                 console.warn(`❌ Payment Failed/Cancelled: ${ResultDesc}`);
                 updateData.status = 'FAILED';
             }
 
-            // ✅ Update in database using db.airtime_transactions() (Admin client)
+            // ✅ Update Database
             try {
                 const { error } = await db.airtime_transactions()
                     .update(updateData)
                     .eq('checkout_request_id', CheckoutRequestID);
                 
-                if (error) {
-                    console.error("❌ [DB_UPDATE_ERROR]:", error);
-                } else {
-                    console.log(`✅ [DB_UPDATE]: Transaction ${CheckoutRequestID} updated in database`);
-                }
+                if (error) console.error("❌ [DB_UPDATE_ERROR]:", error);
+                else console.log(`✅ [DB_UPDATE]: Transaction ${CheckoutRequestID} updated in database`);
             } catch (dbError) {
                 console.error("❌ [DB_UPDATE_EXCEPTION]:", dbError.message);
-                // Continue even if DB update fails
             }
 
-            // ✅ Log callback for debugging
+            // ✅ Audit Trail
             await this.logMpesaCallback({
                 checkout_request_id: CheckoutRequestID,
                 result_code: ResultCode,
@@ -178,13 +169,12 @@ class StkService {
                 callback_data: callbackData
             });
 
-            // ✅ Update in memory
+            // ✅ Update memory
             transactions.set(CheckoutRequestID, {
                 ...transaction,
                 ...updateData
             });
 
-            console.log(`✅ Transaction ${CheckoutRequestID} status updated to: ${updateData.status}`);
             return true;
 
         } catch (error) {
@@ -193,77 +183,39 @@ class StkService {
         }
     }
 
-    /**
-     * 🔍 GET TRANSACTION STATUS - From database with memory fallback
-     */
     async getTransactionStatus(checkoutRequestId) {
         try {
-            // First try to get from database using airtime_transactions() (Admin client)
             let transaction = null;
             
-            try {
-                const { data, error } = await db.airtime_transactions()
-                    .select('*')
-                    .eq('checkout_request_id', checkoutRequestId)
-                    .maybeSingle(); // Use maybeSingle instead of single to avoid errors when not found
-                
-                if (error) {
-                    console.warn("⚠️ [DB_FETCH_ERROR]:", error.message);
-                } else {
-                    transaction = data;
-                }
-            } catch (dbError) {
-                console.warn("⚠️ [DB_FETCH_EXCEPTION]:", dbError.message);
-            }
+            // Database Check
+            const { data, error } = await db.airtime_transactions()
+                .select('*')
+                .eq('checkout_request_id', checkoutRequestId)
+                .maybeSingle();
             
-            // If not found in DB, check memory
-            if (!transaction) {
-                transaction = transactions.get(checkoutRequestId);
-            }
+            transaction = data || transactions.get(checkoutRequestId);
             
-            if (!transaction) {
-                return {
-                    success: false,
-                    status: 'NOT_FOUND',
-                    message: 'Transaction not found'
-                };
-            }
+            if (!transaction) return { success: false, status: 'NOT_FOUND', message: 'Not found' };
 
             return {
                 success: true,
                 status: transaction.status || 'PENDING',
-                transaction: {
-                    checkoutRequestId,
-                    ...transaction
-                }
+                transaction: { checkoutRequestId, ...transaction }
             };
 
         } catch (error) {
             console.error("❌ [STATUS_CHECK_ERROR]:", error.message);
-            return {
-                success: false,
-                status: 'ERROR',
-                message: error.message
-            };
+            return { success: false, status: 'ERROR', message: error.message };
         }
     }
 
-    /**
-     * 📝 LOG MPESA CALLBACK - For debugging and audit trail
-     */
-    async logMpesaCallback(callbackData) {
+    async logMpesaCallback(payload) {
         try {
-            const { error } = await db.mpesa_callback_logs()
-                .insert([{
-                    callback_data: callbackData,
-                    received_at: new Date().toISOString()
-                }]);
-            
-            if (error) {
-                console.error("❌ [CALLBACK_LOG_ERROR]:", error);
-            } else {
-                console.log("✅ [CALLBACK_LOG]: Callback logged successfully");
-            }
+            await db.mpesa_callback_logs().insert([{
+                callback_data: payload,
+                received_at: new Date().toISOString()
+            }]);
+            console.log("✅ [CALLBACK_LOG]: Audit trail updated");
         } catch (error) {
             console.error("❌ [CALLBACK_LOG_EXCEPTION]:", error.message);
         }
