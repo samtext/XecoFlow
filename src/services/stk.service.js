@@ -1,7 +1,7 @@
 import axios from 'axios';
 import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/mpesa.js';
 import mpesaAuth from './mpesa.auth.js'; 
-import { db } from './dbService.js'; // Import the db object
+import { db } from '../config/db.js'; // ✅ Fixed: Correct path to db.js
 
 // ✅ Store transactions in memory as backup/fast access
 const transactions = new Map();
@@ -170,6 +170,14 @@ class StkService {
                 // Continue even if DB update fails
             }
 
+            // ✅ Log callback for debugging
+            await this.logMpesaCallback({
+                checkout_request_id: CheckoutRequestID,
+                result_code: ResultCode,
+                result_desc: ResultDesc,
+                callback_data: callbackData
+            });
+
             // ✅ Update in memory
             transactions.set(CheckoutRequestID, {
                 ...transaction,
@@ -197,7 +205,7 @@ class StkService {
                 const { data, error } = await db.airtime_transactions()
                     .select('*')
                     .eq('checkout_request_id', checkoutRequestId)
-                    .single();
+                    .maybeSingle(); // Use maybeSingle instead of single to avoid errors when not found
                 
                 if (error) {
                     console.warn("⚠️ [DB_FETCH_ERROR]:", error.message);
@@ -253,6 +261,8 @@ class StkService {
             
             if (error) {
                 console.error("❌ [CALLBACK_LOG_ERROR]:", error);
+            } else {
+                console.log("✅ [CALLBACK_LOG]: Callback logged successfully");
             }
         } catch (error) {
             console.error("❌ [CALLBACK_LOG_EXCEPTION]:", error.message);
