@@ -5,8 +5,9 @@ import {
     handleC2BValidation, 
     handleC2BConfirmation 
 } from '../controllers/callbackController.js';
-import { mpesaIpWhitelist } from '../middlewares/mpesa.middleware.js'; // Ensure correct path
+import { mpesaIpWhitelist } from '../middlewares/mpesa.middleware.js';
 import c2bService from '../services/c2b.service.js';
+import stkService from '../services/stk.service.js'; // Add this import
 
 const router = express.Router();
 
@@ -36,6 +37,37 @@ router.get('/ping', (req, res) => {
 // 💳 CATEGORY 1: ACTIVE REQUESTS (User-Facing)
 router.post('/stkpush', initiatePayment);
 
+// 🔍 NEW: Transaction Status Check Endpoint
+router.get('/status/:checkoutId', async (req, res) => {
+    try {
+        const { checkoutId } = req.params;
+        console.log(`🔍 Checking status for: ${checkoutId}`);
+        
+        const result = await stkService.getTransactionStatus(checkoutId);
+        
+        if (result.success) {
+            return res.status(200).json({
+                success: true,
+                status: result.status,
+                transaction: result.transaction
+            });
+        } else {
+            return res.status(404).json({
+                success: false,
+                status: result.status,
+                message: result.message
+            });
+        }
+    } catch (error) {
+        console.error("❌ [STATUS_ERROR]:", error.message);
+        return res.status(500).json({
+            success: false,
+            status: 'ERROR',
+            message: error.message
+        });
+    }
+});
+
 // 🔗 CATEGORY 2: ADMINISTRATION (Dev-Facing)
 router.get('/setup-urls', async (req, res) => {
     try {
@@ -50,10 +82,6 @@ router.get('/setup-urls', async (req, res) => {
 
 /**
  * 📥 CATEGORY 3: WEBHOOKS (Safaricom-Facing)
- * We combine:
- * 1. Specific JSON parsing for webhooks
- * 2. IP Whitelisting for 2026 Production security
- * 3. Network logging for easier debugging
  */
 const webhookMiddleware = [express.json({ limit: '100kb' }), mpesaIpWhitelist, networkLogger];
 

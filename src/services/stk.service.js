@@ -2,6 +2,9 @@ import axios from 'axios';
 import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/mpesa.js';
 import mpesaAuth from './mpesa.auth.js'; 
 
+// ✅ Store transactions in memory for frontend to check
+const transactions = new Map();
+
 class StkService {
     async initiateSTKPush(phoneNumber, amount, userId, packageId = "default") {
         try {
@@ -48,8 +51,27 @@ class StkService {
                 }
             );
 
-            console.log(`✅ [MPESA_SUCCESS]: CheckoutID: ${response.data.CheckoutRequestID}`);
-            return { success: true, data: response.data };
+            // ✅ Store initial transaction status
+            const checkoutId = response.data.CheckoutRequestID;
+            transactions.set(checkoutId, {
+                status: 'PENDING',
+                phoneNumber: cleanPhone,
+                amount,
+                userId,
+                packageId,
+                timestamp: new Date().toISOString()
+            });
+
+            console.log(`✅ [MPESA_SUCCESS]: CheckoutID: ${checkoutId}`);
+            
+            // ✅ Return checkout ID to frontend
+            return { 
+                success: true, 
+                data: {
+                    ...response.data,
+                    checkoutRequestId: checkoutId
+                }
+            };
 
         } catch (error) {
             const errorData = error.response?.data || error.message;
@@ -59,38 +81,95 @@ class StkService {
     }
 
     /**
-     * 🔄 HANDLE CALLBACK (The Infinity Fix)
-     * This function updates your database status so the frontend stops spinning.
+     * 🔄 HANDLE CALLBACK - Updates transaction status
      */
     async handleStkResult(callbackData) {
-        const { CheckoutRequestID, ResultCode, ResultDesc } = callbackData;
+        const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = callbackData;
         
         console.log(`\n📝 [CALLBACK_RECEIVED]: ${CheckoutRequestID}`);
         console.log(`📊 Result: ${ResultCode} (${ResultDesc})`);
 
         try {
-            /**
-             * 🛑 IMPORTANT:
-             * Your frontend "Infinity" happens because the status stays 'PENDING'.
-             * You MUST update the database even if ResultCode is NOT 0.
-             */
+            // Get existing transaction
+            const transaction = transactions.get(CheckoutRequestID) || {};
             
             if (ResultCode === 0) {
-                const metadata = callbackData.CallbackMetadata.Item;
+                // Payment successful
+                const metadata = CallbackMetadata?.Item || [];
                 const mpesaReceipt = metadata.find(i => i.Name === 'MpesaReceiptNumber')?.Value;
+                const amount = metadata.find(i => i.Name === 'Amount')?.Value;
+                const phone = metadata.find(i => i.Name === 'PhoneNumber')?.Value;
+                const transactionDate = metadata.find(i => i.Name === 'TransactionDate')?.Value;
                 
                 console.log(`💰 Payment Successful! Receipt: ${mpesaReceipt}`);
-                // TODO: Update your DB: status = 'COMPLETED', receipt = mpesaReceipt
+                
+                // ✅ Update transaction with SUCCESS status
+                transactions.set(CheckoutRequestID, {
+                    ...transaction,
+                    status: 'SUCCESS',
+                    resultCode: ResultCode,
+                    resultDesc: ResultDesc,
+                    mpesaReceipt,
+                    amount,
+                    phoneNumber: phone,
+                    transactionDate,
+                    updatedAt: new Date().toISOString()
+                });
+                
             } else {
+                // Payment failed
                 console.warn(`❌ Payment Failed/Cancelled: ${ResultDesc}`);
-                // TODO: Update your DB: status = 'FAILED', reason = ResultDesc
-                // This 'FAILED' status is what tells your frontend to stop the spinner.
+                
+                // ✅ Update transaction with FAILED status
+                transactions.set(CheckoutRequestID, {
+                    ...transaction,
+                    status: 'FAILED',
+                    resultCode: ResultCode,
+                    resultDesc: ResultDesc,
+                    updatedAt: new Date().toISOString()
+                });
             }
 
+            console.log(`✅ Transaction ${CheckoutRequestID} status updated to: ${transactions.get(CheckoutRequestID).status}`);
             return true;
+
         } catch (error) {
             console.error("❌ [DB_UPDATE_ERROR]:", error.message);
             throw error;
+        }
+    }
+
+    /**
+     * 🔍 GET TRANSACTION STATUS - For frontend polling
+     */
+    async getTransactionStatus(checkoutRequestId) {
+        try {
+            const transaction = transactions.get(checkoutRequestId);
+            
+            if (!transaction) {
+                return {
+                    success: false,
+                    status: 'NOT_FOUND',
+                    message: 'Transaction not found'
+                };
+            }
+
+            return {
+                success: true,
+                status: transaction.status,
+                transaction: {
+                    ...transaction,
+                    checkoutRequestId
+                }
+            };
+
+        } catch (error) {
+            console.error("❌ [STATUS_CHECK_ERROR]:", error.message);
+            return {
+                success: false,
+                status: 'ERROR',
+                message: error.message
+            };
         }
     }
 }
