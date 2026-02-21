@@ -86,10 +86,7 @@ class StkService {
             
             return { 
                 success: true, 
-                data: {
-                    ...response.data,
-                    checkoutRequestId: checkoutId
-                }
+                data: { ...response.data, checkoutRequestId: checkoutId }
             };
 
         } catch (error) {
@@ -125,31 +122,25 @@ class StkService {
                 updateData.mpesa_receipt = mpesaReceipt;
             }
 
-            // ✅ Update memory immediately
+            // Memory update for frontend polling
             transactions.set(CheckoutRequestID, { ...transaction, ...updateData });
 
-            // ✅ Update airtime_transactions
+            // Update airtime_transactions
             try {
-                const { error } = await db.airtime_transactions()
-                    .update(updateData)
-                    .eq('checkout_id', CheckoutRequestID);
-                
-                if (error) console.error("❌ [DB_UPDATE_ERROR]:", error.message);
-                else console.log(`✅ [DB_UPDATE]: Transaction ${CheckoutRequestID} updated`);
+                await db.airtime_transactions().update(updateData).eq('checkout_id', CheckoutRequestID);
             } catch (dbError) {
                 console.error("❌ [DB_UPDATE_EXCEPTION]:", dbError.message);
             }
 
-            // ✅ Log to Audit Trail
-            this.logMpesaCallback({
+            // Audit Trail
+            await this.logMpesaCallback({
                 checkout_id: CheckoutRequestID,
                 result_code: ResultCode,
                 result_desc: ResultDesc,
-                raw_callback: callbackData
-            }).catch(err => console.error("⚠️ Audit Log failed silently"));
+                callback_raw: callbackData
+            });
 
             return true;
-
         } catch (error) {
             console.error("❌ [CALLBACK_HANDLER_ERROR]:", error.message);
             throw error;
@@ -180,18 +171,15 @@ class StkService {
 
     async logMpesaCallback(payload) {
         try {
-            // ✅ Mapping to both columns to cover all bases after schema reload
+            // ✅ We insert into both columns to ensure the insert works regardless of cache status
             const { error } = await db.mpesa_callback_logs().insert([{
-                callback_data: payload,
-                metadata: payload, 
+                callback_data: payload, 
+                metadata: payload,
                 received_at: new Date().toISOString()
             }]);
             
-            if (error) {
-                console.error("❌ [CALLBACK_LOG_DB_ERROR]:", error.message);
-            } else {
-                console.log("✅ [CALLBACK_LOG]: Record saved successfully");
-            }
+            if (error) console.error("❌ [CALLBACK_LOG_DB_ERROR]:", error.message);
+            else console.log("✅ [CALLBACK_LOG]: Record saved to mpesa_callback_logs");
         } catch (error) {
             console.error("❌ [CALLBACK_LOG_EXCEPTION]:", error.message);
         }
