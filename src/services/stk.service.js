@@ -9,22 +9,13 @@ class StkService {
             if (!accessToken) throw new Error("Access Token missing.");
 
             const timestamp = getMpesaTimestamp();
-            
-            /**
-             * 🛠️ SECURITY FIX:
-             * In Safaricom STK Push, the Password MUST be generated using the 
-             * BusinessShortCode (the one with the Passkey). 
-             */
             const password = generateSTKPassword(timestamp);
 
-            // Format phone to 254...
             let cleanPhone = phoneNumber.trim().replace('+', '');
             if (cleanPhone.startsWith('0')) {
                 cleanPhone = `254${cleanPhone.slice(1)}`;
             }
 
-            // ⚠️ DEBUG: Check if your URL contains the word "mpesa". 
-            // Safaricom Sandbox often blocks URLs with "mpesa" in the path.
             const finalCallbackUrl = "https://xecoflow.onrender.com/api/v1/gateway/hooks/stk-callback";
 
             const payload = {
@@ -34,8 +25,6 @@ class StkService {
                 TransactionType: "CustomerBuyGoodsOnline", 
                 Amount: Math.round(Number(amount)), 
                 PartyA: cleanPhone,
-                // For Buy Goods (Till), PartyB is the TILL NUMBER, but 
-                // BusinessShortCode is the STORE NUMBER used to generate the password.
                 PartyB: mpesaConfig.till || mpesaConfig.shortCode, 
                 PhoneNumber: cleanPhone,
                 CallBackURL: finalCallbackUrl,
@@ -69,9 +58,40 @@ class StkService {
         }
     }
 
+    /**
+     * 🔄 HANDLE CALLBACK (The Infinity Fix)
+     * This function updates your database status so the frontend stops spinning.
+     */
     async handleStkResult(callbackData) {
-        // Your logic to update DB here...
-        console.log("📝 Processing Callback Background:", callbackData.CheckoutRequestID);
+        const { CheckoutRequestID, ResultCode, ResultDesc } = callbackData;
+        
+        console.log(`\n📝 [CALLBACK_RECEIVED]: ${CheckoutRequestID}`);
+        console.log(`📊 Result: ${ResultCode} (${ResultDesc})`);
+
+        try {
+            /**
+             * 🛑 IMPORTANT:
+             * Your frontend "Infinity" happens because the status stays 'PENDING'.
+             * You MUST update the database even if ResultCode is NOT 0.
+             */
+            
+            if (ResultCode === 0) {
+                const metadata = callbackData.CallbackMetadata.Item;
+                const mpesaReceipt = metadata.find(i => i.Name === 'MpesaReceiptNumber')?.Value;
+                
+                console.log(`💰 Payment Successful! Receipt: ${mpesaReceipt}`);
+                // TODO: Update your DB: status = 'COMPLETED', receipt = mpesaReceipt
+            } else {
+                console.warn(`❌ Payment Failed/Cancelled: ${ResultDesc}`);
+                // TODO: Update your DB: status = 'FAILED', reason = ResultDesc
+                // This 'FAILED' status is what tells your frontend to stop the spinner.
+            }
+
+            return true;
+        } catch (error) {
+            console.error("❌ [DB_UPDATE_ERROR]:", error.message);
+            throw error;
+        }
     }
 }
 
