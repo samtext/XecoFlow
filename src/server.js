@@ -8,7 +8,7 @@ import authRoutes from './routes/authRoutes.js';
 const app = express();
 
 /**
- * 🛠️ LOG FLUSHER & RENDER FIX
+ * 🛠️ LOG FLUSHER
  */
 const originalLog = console.log;
 console.log = (...args) => {
@@ -38,7 +38,6 @@ const corsOptions = {
         if (!origin || allowedOrigins.some(o => origin.startsWith(o)) || origin.includes('localhost')) {
             callback(null, true);
         } else {
-            console.error(`🚫 [CORS BLOCKED]: ${origin}`);
             callback(new Error('Not allowed by CORS Security Policy'));
         }
     },
@@ -48,28 +47,24 @@ const corsOptions = {
     optionsSuccessStatus: 200
 };
 
-// 1. Global Middleware
 app.use(cors(corsOptions));
 
 /**
  * 📦 BODY PARSING
- * Added a specific check for JSON to ensure Safaricom's payload is captured.
+ * Safaricom sends JSON. We ensure it's parsed BEFORE any routes.
  */
-app.use(express.json({ 
-    limit: '50kb',
-    verify: (req, res, buf) => { req.rawBody = buf; } // Stores raw body for debugging if needed
-})); 
+app.use(express.json({ limit: '50kb' })); 
 app.use(express.urlencoded({ extended: true }));
 
 /**
- * 🕵️ DEBUG & NETWORK LOGGING
+ * 🕵️ CALLBACK HANDSHAKE LOGGER
+ * If Safaricom hits ANY path containing "callback" or "hooks", we log it immediately.
  */
 app.use((req, res, next) => {
-    const time = new Date().toLocaleTimeString();
-    console.log(`📡 [${time}] ${req.method} ${req.originalUrl}`);
-    // Log headers for callbacks to ensure Safaricom is hitting us correctly
-    if (req.originalUrl.includes('hooks')) {
-        console.log(`🔌 Webhook Headers: ${JSON.stringify(req.headers['content-type'])}`);
+    if (req.originalUrl.includes('callback') || req.originalUrl.includes('hooks')) {
+        console.log(`\n🔔 [INTERCEPTED]: ${req.method} ${req.originalUrl}`);
+        console.log(`🏠 FROM IP: ${req.ip}`);
+        console.log(`📦 BODY: ${JSON.stringify(req.body).substring(0, 100)}...`);
     }
     next();
 });
@@ -79,8 +74,6 @@ app.get('/', (req, res) => res.status(200).send('🚀 BIG-SYSTEM ENGINE: ONLINE'
 
 /**
  * 🛣️ ROUTES
- * IMPORTANT: If 'mpesaRoutes' also has '/api/v1/gateway' inside it, 
- * you must remove it from the router file to prevent /api/v1/gateway/api/v1/gateway
  */
 app.use('/api/v1/auth', authRoutes);   
 app.use('/api/v1/gateway', mpesaRoutes); 
@@ -88,14 +81,10 @@ app.use('/api/v1', apiRoutes);
 
 /**
  * 🛑 404 HANDLER
- * Enhanced to show if the error is due to an unsupported method (e.g., GET instead of POST)
  */
 app.use((req, res) => {
-    console.warn(`⚠️ [404 ERROR]: ${req.method} ${req.originalUrl} - Not Found`);
-    res.status(404).json({ 
-        error: `Endpoint ${req.originalUrl} not found.`,
-        hint: `Ensure you are using the correct HTTP Method (POST for callbacks).`
-    });
+    console.warn(`⚠️ [404]: ${req.method} ${req.originalUrl}`);
+    res.status(404).json({ error: `Endpoint ${req.originalUrl} not found.` });
 });
 
 /**
@@ -110,7 +99,6 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n=========================================`);
     console.log(`🚀 SERVER RUNNING ON PORT ${PORT}`);
-    console.log(`🔗 STK PUSH:  POST /api/v1/gateway/stkpush`);
-    console.log(`🔗 CALLBACK:  POST /api/v1/gateway/hooks/stk-callback`);
+    console.log(`🔗 CALLBACK EXPECTED AT: https://xecoflow.onrender.com/api/v1/gateway/hooks/stk-callback`);
     console.log(`=========================================\n`);
 });
