@@ -11,32 +11,41 @@ const getClientIp = (req) => {
  * Matches the route: /hooks/stk-callback
  */
 export const handleMpesaCallback = async (req, res) => {
+    // 1. Immediate response to Safaricom 
+    // We do this first to ensure Safaricom doesn't time out or retry
+    res.status(200).json({ ResultCode: 0, ResultDesc: "Success" });
+
     try {
         const ipAddress = getClientIp(req);
         
-        // 1. Log the RAW body immediately to see what Safaricom is sending
-        console.log(`📥 [STK CALLBACK RECEIVED] From IP: ${ipAddress}`);
-        console.log('📦 [RAW PAYLOAD]:', JSON.stringify(req.body, null, 2));
-
-        // 2. Immediate response to Safaricom (Crucial to prevent retries)
-        res.status(200).json({ ResultCode: 0, ResultDesc: "Success" });
-
-        // 3. Background processing
+        console.log(`\n📥 [STK CALLBACK RECEIVED] From IP: ${ipAddress}`);
+        
+        // 2. Background processing
         const { Body } = req.body;
+        
         if (Body?.stkCallback) {
-            const checkoutID = Body.stkCallback.CheckoutRequestID;
-            const resultCode = Body.stkCallback.ResultCode;
+            const callbackData = Body.stkCallback;
+            const checkoutID = callbackData.CheckoutRequestID;
+            const resultCode = callbackData.ResultCode;
             
-            console.log(`🔍 [PROCESSING]: CheckoutID: ${checkoutID} | Result: ${resultCode === 0 ? 'SUCCESS' : 'FAILED/CANCELLED'}`);
-            
-            // Logic moved to specialist service
-            await stkService.handleStkResult(Body.stkCallback);
+            console.log(`📦 [PAYLOAD]: ${checkoutID} | Result: ${resultCode}`);
+
+            // Safaricom Sandbox debugging: Log the full metadata if successful
+            if (resultCode === 0) {
+                console.log('✅ [SUCCESS_METADATA]:', JSON.stringify(callbackData.CallbackMetadata, null, 2));
+            }
+
+            // Wrap service call in a try-catch so it doesn't kill the callback process
+            try {
+                await stkService.handleStkResult(callbackData);
+            } catch (serviceErr) {
+                console.error("❌ [SERVICE_PROCESSING_FAIL]:", serviceErr.message);
+            }
         } else {
-            console.warn("⚠️ [STK CALLBACK]: Received payload missing Body.stkCallback structure.");
+            console.warn("⚠️ [RAW_BODY_DEBUG]: Received unknown structure:", JSON.stringify(req.body));
         }
     } catch (error) {
-        console.error("❌ [STK_CALLBACK_ERROR]:", error.message);
-        // Note: Do not send error status to Safaricom here as we already sent 200
+        console.error("❌ [STK_CALLBACK_CRITICAL_ERROR]:", error.message);
     }
 };
 
@@ -59,14 +68,11 @@ export const handleC2BValidation = async (req, res) => {
  * Matches the route: /hooks/v2-confirmation
  */
 export const handleC2BConfirmation = async (req, res) => {
-    try {
-        // 1. Immediate response
-        res.status(200).json({ "ResultCode": 0, "ResultDesc": "Success" });
+    // 1. Immediate response
+    res.status(200).json({ "ResultCode": 0, "ResultDesc": "Success" });
 
-        // 2. Logic delegated to specialist service
+    try {
         console.log(`💰 [C2B_CONFIRMATION RECEIVED]: TransID: ${req.body.TransID}`);
-        console.log('📦 [C2B DATA]:', JSON.stringify(req.body, null, 2));
-        
         await c2bService.handleC2BConfirmation(req.body);
     } catch (error) {
         console.error("❌ [C2B_CONF_ERROR]:", error.message);
