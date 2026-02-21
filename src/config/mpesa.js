@@ -1,43 +1,45 @@
-// src/config/mpesa.js
 import dotenv from 'dotenv';
 dotenv.config();
 
+/**
+ * 🛠️ CONFIG VALIDATION
+ * Ensures the app doesn't start with broken credentials.
+ */
+const requiredEnvs = ['MPESA_CONSUMER_KEY', 'MPESA_CONSUMER_SECRET', 'MPESA_PASSKEY', 'MPESA_BUSINESS_SHORTCODE'];
+requiredEnvs.forEach(key => {
+    if (!process.env[key]) {
+        console.warn(`⚠️  [CONFIG WARNING]: ${key} is missing in .env!`);
+    }
+});
+
 const mpesaConfig = {
-    environment: process.env.MPESA_ENVIRONMENT || 'production',
+    environment: (process.env.MPESA_ENVIRONMENT || 'production').toLowerCase(),
     consumerKey: (process.env.MPESA_CONSUMER_KEY || '').trim(),
     consumerSecret: (process.env.MPESA_CONSUMER_SECRET || '').trim(),
     passkey: (process.env.MPESA_PASSKEY || '').trim(),
-    
-    // UPDATED: Added trim() to prevent "Invalid PartyB" caused by hidden spaces
     shortCode: (process.env.MPESA_BUSINESS_SHORTCODE || '').trim(), 
-    
-    // UPDATED: Added trim() to ensure this matches your working test (4938110)
     till: (process.env.MPESA_TILL || '').trim(), 
-    
     callbackUrl: (process.env.MPESA_CALLBACK_URL || '').trim(),
-    baseUrl: 'https://api.safaricom.co.ke', // Production Base URL
     
+    // Dynamic URL based on environment
+    baseUrl: (process.env.MPESA_ENVIRONMENT === 'sandbox') 
+        ? 'https://sandbox.safaricom.co.ke' 
+        : 'https://api.safaricom.co.ke',
+
     authEndpoint: '/oauth/v1/generate?grant_type=client_credentials',
     stkPushEndpoint: '/mpesa/stkpush/v1/processrequest',
-    
-    /**
-     * 🛡️ SECURE AUTH GENERATION
-     * Safaricom Production requires a very clean Base64 string.
-     */
+    c2bRegisterEndpoint: '/mpesa/c2b/v1/registerurl', // Added for future C2B use
+
     getBasicAuthToken() {
-        const key = this.consumerKey.trim();
-        const secret = this.consumerSecret.trim();
-        // Standard Buffer for Node.js ESM
-        return Buffer.from(`${key}:${secret}`).toString('base64');
+        return Buffer.from(`${this.consumerKey}:${this.consumerSecret}`).toString('base64');
     }
 };
 
 /**
  * 🔐 PRODUCTION PASSWORD GENERATION
- * For Buy Goods: The password MUST be hashed using the Business Shortcode (Store Number).
  */
 export const generateSTKPassword = (timestamp) => {
-    // We use the shortCode (Store Number) for hashing as per Safaricom Production rules
+    // For Tills (Buy Goods), codeToHash must be the Store Number (shortCode)
     const codeToHash = mpesaConfig.shortCode; 
     const passkey = mpesaConfig.passkey;
     return Buffer.from(codeToHash + passkey + timestamp).toString('base64');
@@ -45,18 +47,17 @@ export const generateSTKPassword = (timestamp) => {
 
 /**
  * 🕒 TIMESTAMP GENERATION (EAT SYNC)
- * Generates timestamp in YYYYMMDDHHmmss format.
- * Safaricom's production servers are strictly on East African Time (UTC+3).
  */
 export const getMpesaTimestamp = () => {
     const now = new Date();
-    // Safaricom production servers expect EAT (UTC+3)
+    // Safaricom servers = EAT (UTC+3). 
+    // This logic ensures sync regardless of server location (Render/AWS/Google).
     const eatOffset = 3 * 60 * 60 * 1000;
     const eatDate = new Date(now.getTime() + eatOffset);
     
     return eatDate.toISOString()
-        .replace(/[-:T.Z]/g, '') // Removes special characters
-        .slice(0, 14);           // Takes exactly YYYYMMDDHHmmss
+        .replace(/[-:T.Z]/g, '')
+        .slice(0, 14);
 };
 
 export default mpesaConfig;
