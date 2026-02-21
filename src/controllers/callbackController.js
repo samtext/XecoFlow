@@ -1,7 +1,6 @@
-import stkService from '../services/stk.service.js'; // Specialized STK handler
-import c2bService from '../services/c2b.service.js'; // Specialized C2B handler
+import stkService from '../services/stk.service.js';
+import c2bService from '../services/c2b.service.js';
 
-// Helper to get the most accurate IP on Render
 const getClientIp = (req) => {
     const forwarded = req.headers['x-forwarded-for'];
     return forwarded ? forwarded.split(',')[0].trim() : req.socket.remoteAddress || '0.0.0.0';
@@ -9,61 +8,52 @@ const getClientIp = (req) => {
 
 /**
  * 🚀 LANE 1: STK PUSH CALLBACK
- * Triggered after a user enters (or fails to enter) their PIN.
+ * Matches the route: /hooks/stk-callback
  */
-export const handleStkCallback = async (req, res) => {
+export const handleMpesaCallback = async (req, res) => {
     try {
         const ipAddress = getClientIp(req);
         console.log(`📥 [STK CALLBACK]: Received from ${ipAddress}`);
 
-        // 1. Acknowledge Safaricom immediately
+        // 1. Immediate response to Safaricom
         res.status(200).json({ ResultCode: 0, ResultDesc: "Success" });
 
-        // 2. Process background logic via STK Service
-        // This updates the status from 'PENDING_PAYMENT' to 'SUCCESS' or 'FAILED'
+        // 2. Background processing
         const { Body } = req.body;
-        console.log(`🔍 [STK_RESULT]: ID ${Body.stkCallback.CheckoutRequestID} | Code ${Body.stkCallback.ResultCode}`);
-
-        // We assume handleCallback logic exists in your stk.service.js
-        // If not, you can process the Body.stkCallback directly here
+        if (Body?.stkCallback) {
+            // Logic moved to specialist service
+            await stkService.handleStkResult(Body.stkCallback);
+        }
     } catch (error) {
-        console.error("❌ [STK_CALLBACK_CRITICAL]:", error.message);
+        console.error("❌ [STK_CALLBACK_ERROR]:", error.message);
     }
 };
 
 /**
  * 🛡️ LANE 2: C2B VALIDATION
- * Safaricom asks: "Should I allow this manual Paybill payment?"
+ * Matches the route: /hooks/v2-validation
  */
 export const handleC2BValidation = async (req, res) => {
     try {
-        const { TransID, MSISDN, TransAmount } = req.body;
-        console.log(`🔍 [C2B_VALIDATION]: ID ${TransID} | Amount ${TransAmount}`);
-
-        // Logic check: You could reject payments here if the amount is too small
+        console.log(`🔍 [C2B_VALIDATION]: ID ${req.body.TransID}`);
         return res.status(200).json({ "ResultCode": 0, "ResultDesc": "Accepted" });
     } catch (error) {
-        console.error("❌ [C2B_VAL_ERROR]:", error.message);
         return res.status(200).json({ "ResultCode": 0, "ResultDesc": "Accepted" });
     }
 };
 
 /**
  * 💰 LANE 3: C2B CONFIRMATION
- * Safaricom says: "The money has been received for this Paybill/Till."
+ * Matches the route: /hooks/v2-confirmation
  */
 export const handleC2BConfirmation = async (req, res) => {
     try {
-        const ipAddress = getClientIp(req);
-        
-        // 1. Immediate acknowledgment
+        // 1. Immediate response
         res.status(200).json({ "ResultCode": 0, "ResultDesc": "Success" });
 
-        // 2. Pass the flat C2B v2 payload to your specialized C2B Service
-        console.log(`💰 [C2B_CONFIRMATION]: ID ${req.body.TransID} | Amount ${req.body.TransAmount}`);
-        
+        // 2. Logic delegated to specialist service
+        console.log(`💰 [C2B_CONFIRMATION]: ID ${req.body.TransID}`);
         await c2bService.handleC2BConfirmation(req.body);
-
     } catch (error) {
         console.error("❌ [C2B_CONF_ERROR]:", error.message);
     }

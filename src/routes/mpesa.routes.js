@@ -36,10 +36,7 @@ router.post('/stkpush', initiatePayment);
 router.get('/setup-urls', async (req, res) => {
     try {
         console.log("🔗 [SETUP]: Triggering C2B v2 registration...");
-        
-        // ✅ FIXED: Calling the method from the c2bService instance
         const result = await c2bService.registerC2Bv2();
-        
         return res.status(200).json({ success: true, data: result });
     } catch (error) {
         console.error("❌ [SETUP_ERROR]:", error.message);
@@ -49,6 +46,7 @@ router.get('/setup-urls', async (req, res) => {
 
 /**
  * 📥 CATEGORY 3: WEBHOOKS (Safaricom-Facing)
+ * These match the exports in callbackController.js exactly.
  */
 router.post('/hooks/stk-callback', networkLogger, handleMpesaCallback);
 router.post('/hooks/v2-validation', networkLogger, handleC2BValidation);
