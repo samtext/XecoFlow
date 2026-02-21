@@ -54,21 +54,19 @@ class StkService {
 
             const checkoutId = response.data.CheckoutRequestID;
             
-            // ✅ MATCHES YOUR SQL SCHEMA: Use 'checkout_id' and 'idempotency_key'
             const transactionData = {
                 checkout_id: checkoutId,
                 phone_number: cleanPhone,
                 amount: amount,
                 user_id: userId,
-                network: 'SAFARICOM', // Required by your network_provider ENUM
-                status: 'PENDING_PAYMENT', // Matches your transaction_status ENUM
-                idempotency_key: crypto.randomUUID(), // Required by your UNIQUE constraint
+                network: 'SAFARICOM', 
+                status: 'PENDING_PAYMENT', 
+                idempotency_key: crypto.randomUUID(), 
                 metadata: { package_id: packageId },
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
             };
 
-            // ✅ Save to database
             try {
                 const { data, error } = await db.airtime_transactions()
                     .insert([transactionData])
@@ -83,9 +81,7 @@ class StkService {
                 console.error("❌ [DB_SAVE_EXCEPTION]:", dbError.message);
             }
 
-            // ✅ Store in memory as backup
             transactions.set(checkoutId, transactionData);
-
             console.log(`✅ [MPESA_SUCCESS]: CheckoutID: ${checkoutId}`);
             
             return { 
@@ -111,8 +107,6 @@ class StkService {
 
         try {
             const transaction = transactions.get(CheckoutRequestID) || {};
-            
-            // Map ResultCode to your specific ENUM types
             let finalStatus = ResultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
 
             let updateData = {
@@ -128,20 +122,13 @@ class StkService {
             if (ResultCode === 0) {
                 const metadata = CallbackMetadata?.Item || [];
                 const mpesaReceipt = metadata.find(i => i.Name === 'MpesaReceiptNumber')?.Value;
-                
-                console.log(`💰 Payment Successful! Receipt: ${mpesaReceipt}`);
                 updateData.mpesa_receipt = mpesaReceipt;
-            } else {
-                console.warn(`❌ Payment Failed/Cancelled: ${ResultDesc}`);
             }
 
-            // ✅ CRITICAL: Update memory FIRST so the frontend polling works even if DB is slow
-            transactions.set(CheckoutRequestID, {
-                ...transaction,
-                ...updateData
-            });
+            // ✅ Update memory immediately
+            transactions.set(CheckoutRequestID, { ...transaction, ...updateData });
 
-            // ✅ Update Database using 'checkout_id'
+            // ✅ Update airtime_transactions
             try {
                 const { error } = await db.airtime_transactions()
                     .update(updateData)
@@ -153,13 +140,13 @@ class StkService {
                 console.error("❌ [DB_UPDATE_EXCEPTION]:", dbError.message);
             }
 
-            // ✅ Audit Trail (Using .then to prevent it from blocking the main flow if UUID fails)
+            // ✅ Log to Audit Trail
             this.logMpesaCallback({
                 checkout_id: CheckoutRequestID,
                 result_code: ResultCode,
                 result_desc: ResultDesc,
-                callback_data: callbackData
-            }).catch(err => console.error("⚠️ Audit Log skipped due to error"));
+                raw_callback: callbackData
+            }).catch(err => console.error("⚠️ Audit Log failed silently"));
 
             return true;
 
@@ -171,26 +158,20 @@ class StkService {
 
     async getTransactionStatus(checkoutRequestId) {
         try {
-            // Check memory FIRST for instant frontend updates
             let transaction = transactions.get(checkoutRequestId);
-            
-            // If not in memory, check Database using correct column 'checkout_id'
             if (!transaction) {
-                const { data, error } = await db.airtime_transactions()
+                const { data } = await db.airtime_transactions()
                     .select('*')
                     .eq('checkout_id', checkoutRequestId)
                     .maybeSingle();
                 transaction = data;
             }
-            
             if (!transaction) return { success: false, status: 'NOT_FOUND', message: 'Not found' };
-
             return {
                 success: true,
                 status: transaction.status,
                 transaction: { checkoutRequestId, ...transaction }
             };
-
         } catch (error) {
             console.error("❌ [STATUS_CHECK_ERROR]:", error.message);
             return { success: false, status: 'ERROR', message: error.message };
@@ -199,17 +180,17 @@ class StkService {
 
     async logMpesaCallback(payload) {
         try {
-            // ✅ Updated to include 'metadata' column from your latest SQL change
+            // ✅ Mapping to both columns to cover all bases after schema reload
             const { error } = await db.mpesa_callback_logs().insert([{
                 callback_data: payload,
-                metadata: payload, // Added this to match your SQL ADD COLUMN
+                metadata: payload, 
                 received_at: new Date().toISOString()
             }]);
             
             if (error) {
                 console.error("❌ [CALLBACK_LOG_DB_ERROR]:", error.message);
             } else {
-                console.log("✅ [CALLBACK_LOG]: Audit trail updated");
+                console.log("✅ [CALLBACK_LOG]: Record saved successfully");
             }
         } catch (error) {
             console.error("❌ [CALLBACK_LOG_EXCEPTION]:", error.message);
