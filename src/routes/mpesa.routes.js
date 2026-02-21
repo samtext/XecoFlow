@@ -6,23 +6,30 @@ import {
     handleC2BConfirmation 
 } from '../controllers/callbackController.js';
 
-// ✅ FIXED: Using the specialized C2B service instance
+// ✅ Using the specialized C2B service instance
 import c2bService from '../services/c2b.service.js';
 
 const router = express.Router();
 
 /**
  * 🚦 MIDDLEWARE: Network Logger
+ * This will show you EXACTLY who is hitting your server in the Render logs.
  */
 const networkLogger = (req, res, next) => {
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
-    console.log(`📡 [GATEWAY_LOG]: ${req.method} ${req.originalUrl} | IP: ${clientIp}`);
+    console.log(`\n📡 [INCOMING_WEBHOOK]: ${req.method} ${req.originalUrl}`);
+    console.log(`🏠 FROM_IP: ${clientIp}`);
+    console.log(`📦 BODY_SIZE: ${JSON.stringify(req.body).length} chars`);
     next();
 };
 
 // --- 0. DIAGNOSTIC PING ---
 router.get('/ping', (req, res) => {
-    res.status(200).json({ status: "Gateway Active", timestamp: new Date() });
+    res.status(200).json({ 
+        status: "Gateway Active", 
+        timestamp: new Date().toISOString(),
+        note: "Webhook routes are live at /hooks/..."
+    });
 });
 
 /**
@@ -46,10 +53,10 @@ router.get('/setup-urls', async (req, res) => {
 
 /**
  * 📥 CATEGORY 3: WEBHOOKS (Safaricom-Facing)
- * These match the exports in callbackController.js exactly.
+ * Explicitly using express.json() here ensures the body is parsed even if global config fails.
  */
-router.post('/hooks/stk-callback', networkLogger, handleMpesaCallback);
-router.post('/hooks/v2-validation', networkLogger, handleC2BValidation);
-router.post('/hooks/v2-confirmation', networkLogger, handleC2BConfirmation);
+router.post('/hooks/stk-callback', express.json(), networkLogger, handleMpesaCallback);
+router.post('/hooks/v2-validation', express.json(), networkLogger, handleC2BValidation);
+router.post('/hooks/v2-confirmation', express.json(), networkLogger, handleC2BConfirmation);
 
 export default router;

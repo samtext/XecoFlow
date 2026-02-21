@@ -8,7 +8,8 @@ import authRoutes from './routes/authRoutes.js';
 const app = express();
 
 /**
- * 🛠️ LOG FLUSHER (RENDER FIX)
+ * 🛠️ LOG FLUSHER & RENDER "ALWAYS-ON" MOCK
+ * Ensures logs don't get buffered/lost in Render's dashboard.
  */
 const originalLog = console.log;
 console.log = (...args) => {
@@ -20,6 +21,7 @@ console.log = (...args) => {
 
 /**
  * 🛡️ PROXY TRUST (CRITICAL FOR RENDER)
+ * Required to get the real IP of Safaricom callbacks through Render's load balancer.
  */
 app.set('trust proxy', 1); 
 
@@ -28,38 +30,44 @@ app.set('trust proxy', 1);
  */
 const allowedOrigins = [
     'https://xecoflow.onrender.com',
-    'https://your-frontend-domain.netlify.app', 
-    'https://your-frontend-domain.vercel.app',  
-    'http://localhost:3000',                     
-    'http://localhost:5173',                       
-    'http://localhost:5174' // ✅ Matches your current frontend port
+    'http://localhost:3000', 
+    'http://localhost:5173', 
+    'http://localhost:5174'
 ];
 
 const corsOptions = {
     origin: (origin, callback) => {
-        // ✅ FIX: Improved origin checking to prevent "Connection Failed"
-        if (!origin || allowedOrigins.includes(origin) || origin.startsWith('http://localhost:')) {
+        // Allow requests with no origin (like mobile apps or curl/terminal tests)
+        if (!origin || allowedOrigins.some(o => origin.startsWith(o)) || origin.includes('localhost')) {
             callback(null, true);
         } else {
-            console.error(`🚫 [CORS BLOCKED]: Unauthorized origin: ${origin}`);
+            console.error(`🚫 [CORS BLOCKED]: ${origin}`);
             callback(new Error('Not allowed by CORS Security Policy'));
         }
     },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // ✅ Added OPTIONS for preflight
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     credentials: true,
-    optionsSuccessStatus: 200 // ✅ Required for legacy browser support
+    optionsSuccessStatus: 200
 };
 
-// 1. Global Middleware
+// 1. Pre-Route Middleware
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '10kb' })); 
+
+/**
+ * 📦 BODY PARSING
+ * Safaricom sends JSON. We set a limit and ensure it's available globally.
+ */
+app.use(express.json({ limit: '50kb' })); 
+app.use(express.urlencoded({ extended: true }));
 
 /**
  * 🕵️ DEBUG & NETWORK LOGGING
  */
 app.use((req, res, next) => {
-    console.log(`📡 [INCOMING]: ${req.method} ${req.originalUrl}`);
+    if (req.originalUrl !== '/api/v1/gateway/ping') {
+        console.log(`📡 [${new Date().toLocaleTimeString()}] ${req.method} ${req.originalUrl}`);
+    }
     next();
 });
 
@@ -77,20 +85,22 @@ app.use('/api/v1', apiRoutes);
  * 🛑 404 HANDLER
  */
 app.use((req, res) => {
-    console.warn(`⚠️  [404]: ${req.method} ${req.originalUrl} not found.`);
-    res.status(404).json({ error: `Endpoint ${req.originalUrl} not found on this server.` });
+    console.warn(`⚠️  [404]: ${req.method} ${req.originalUrl}`);
+    res.status(404).json({ error: `Endpoint ${req.originalUrl} not found.` });
 });
 
 /**
  * 🔥 GLOBAL ERROR HANDLER
  */
 app.use((err, req, res, next) => {
-    console.error('❌ [GLOBAL_ERROR]:', err.stack);
+    console.error('❌ [GLOBAL_ERROR]:', err.message);
     res.status(500).json({ error: "Internal Server Error" });
 });
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n=========================================`);
     console.log(`🚀 SERVER RUNNING ON PORT ${PORT}`);
-    console.log(`📡 STK PUSH ENDPOINT: http://localhost:${PORT}/api/v1/gateway/stkpush`);
+    console.log(`🔗 CALLBACK: https://xecoflow.onrender.com/api/v1/gateway/hooks/stk-callback`);
+    console.log(`=========================================\n`);
 });

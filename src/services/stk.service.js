@@ -25,7 +25,8 @@ class StkService {
 
             /**
              * 🔗 CRITICAL: CALLBACK URL ALIGNMENT
-             * This must match your server.js route: /api/v1/gateway/hooks/stk-callback
+             * Must be HTTPS and publicly accessible. 
+             * Safaricom Sandbox can sometimes be finicky with Render's subdomains.
              */
             const finalCallbackUrl = "https://xecoflow.onrender.com/api/v1/gateway/hooks/stk-callback";
 
@@ -33,17 +34,18 @@ class StkService {
                 BusinessShortCode: mpesaConfig.shortCode, 
                 Password: password,
                 Timestamp: timestamp,
-                TransactionType: "CustomerBuyGoodsOnline", // Or "CustomerPayBillOnline" if using Paybill
+                TransactionType: "CustomerBuyGoodsOnline", // Use CustomerPayBillOnline for Paybills
                 Amount: Math.round(Number(amount)), 
                 PartyA: cleanPhone,
-                PartyB: mpesaConfig.till || mpesaConfig.shortCode, 
+                PartyB: mpesaConfig.shortCode, // For STK Push, PartyB is usually the Shortcode
                 PhoneNumber: cleanPhone,
-                CallBackURL: finalCallbackUrl, // ✅ Explicitly set to our live endpoint
-                AccountReference: userId.slice(0, 12), // Safaricom limit is 12 chars
-                TransactionDesc: `Pkg:${packageId}`
+                CallBackURL: finalCallbackUrl,
+                // ✅ FIX: Safaricom AccountReference is LIMITED to 12 characters.
+                AccountReference: String(userId).slice(-12), 
+                TransactionDesc: `Pkg:${packageId}`.slice(0, 13) // Limit Desc to 13 chars
             };
 
-            console.log(`🚀 [STK_PUSH]: Sending request to ${cleanPhone} for Amt: ${amount}`);
+            console.log(`🚀 [STK_PUSH]: Sending request to ${cleanPhone} | Ref: ${payload.AccountReference}`);
 
             const response = await axios.post(
                 `${mpesaConfig.baseUrl}${mpesaConfig.stkPushEndpoint}`,
@@ -67,13 +69,13 @@ class StkService {
 
     /**
      * 📥 HANDLER: handleStkResult
-     * This is called by your controller when Safaricom sends the callback
+     * Processes the raw POST body sent from Safaricom.
      */
     async handleStkResult(callbackData) {
+        // Safaricom wraps the data in a Body.stkCallback object
         const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = callbackData;
 
-        if (ResultCode === 0) {
-            // Extract metadata (Amount, MpesaReceiptNumber, etc.)
+        if (ResultCode === 0 && CallbackMetadata) {
             const items = CallbackMetadata.Item;
             const amount = items.find(i => i.Name === 'Amount')?.Value;
             const receipt = items.find(i => i.Name === 'MpesaReceiptNumber')?.Value;
@@ -81,11 +83,11 @@ class StkService {
 
             console.log(`✅ [PAYMENT_SUCCESS]: Receipt: ${receipt} | Amt: ${amount} | Phone: ${phone}`);
             
-            // TODO: Update your database here to grant the data/airtime to the user
-            // await User.updateStatus(CheckoutRequestID, 'COMPLETED');
-            
+            // This is where you trigger your DB update logic
+            return { success: true, receipt, amount, checkoutID: CheckoutRequestID };
         } else {
-            console.warn(`❌ [PAYMENT_CANCELLED/FAILED]: ${ResultDesc} (Code: ${ResultCode})`);
+            console.warn(`❌ [PAYMENT_FAILED]: ${ResultDesc} (Code: ${ResultCode})`);
+            return { success: false, error: ResultDesc };
         }
     }
 }
