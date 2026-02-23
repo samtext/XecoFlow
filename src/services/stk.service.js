@@ -2,6 +2,7 @@ import axios from 'axios';
 import mpesaConfig, { generateSTKPassword, getMpesaTimestamp } from '../config/mpesa.js';
 import mpesaAuth from './mpesa.auth.js'; 
 import { db } from '../config/db.js';
+import crypto from 'crypto'; // Ensure crypto is imported for idempotency_key
 
 // ✅ Store transactions in memory as backup/fast access
 const transactions = new Map();
@@ -53,18 +54,22 @@ class StkService {
             );
 
             const checkoutId = response.data.CheckoutRequestID;
-            const merchantId = response.data.MerchantRequestID; // Added for tracking
+            const merchantId = response.data.MerchantRequestID; 
             
             const transactionData = {
                 checkout_id: checkoutId,
-                merchant_id: merchantId, // Added for memory tracking
+                // merchant_id: merchantId, // ❌ Removed to prevent DB error if column is missing
                 phone_number: cleanPhone,
                 amount: amount,
                 user_id: userId,
                 network: 'SAFARICOM', 
                 status: 'PENDING_PAYMENT', 
                 idempotency_key: crypto.randomUUID(), 
-                metadata: { package_id: packageId },
+                // ✅ We store merchant_id here so the insert doesn't fail
+                metadata: { 
+                    package_id: packageId,
+                    merchant_id: merchantId 
+                },
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
             };
@@ -75,9 +80,9 @@ class StkService {
                     .select();
                 
                 if (error) {
-                    console.error("❌ [DB_SAVE_ERROR]:", error.message);
+                    console.error("❌ [DB_SAVE_ERROR]:", error.message, "| Details:", error.details);
                 } else {
-                    console.log(`✅ [DB_SAVE]: Transaction saved with ID: ${data[0]?.id || checkoutId}`);
+                    console.log(`✅ [DB_SAVE]: Transaction saved to airtime_transactions`);
                 }
             } catch (dbError) {
                 console.error("❌ [DB_SAVE_EXCEPTION]:", dbError.message);
@@ -99,7 +104,6 @@ class StkService {
     }
 
     async handleStkResult(callbackData) {
-        // ✨ Extraction logic to fix blank fields
         const { CheckoutRequestID, MerchantRequestID, ResultCode, ResultDesc, CallbackMetadata } = callbackData;
         
         console.log(`\n📝 [CALLBACK_RECEIVED]: ${CheckoutRequestID}`);
@@ -126,17 +130,14 @@ class StkService {
                 updateData.mpesa_receipt = mpesaReceipt;
             }
 
-            // Memory update for frontend polling
             transactions.set(CheckoutRequestID, { ...transaction, ...updateData });
 
-            // Update airtime_transactions
             try {
                 await db.airtime_transactions().update(updateData).eq('checkout_id', CheckoutRequestID);
             } catch (dbError) {
                 console.error("❌ [DB_UPDATE_EXCEPTION]:", dbError.message);
             }
 
-            // ✅ Pass explicit fields to the logger to ensure DB columns are NOT blank
             await this.logMpesaCallback({
                 checkout_id: CheckoutRequestID,
                 merchant_id: MerchantRequestID,
@@ -177,7 +178,6 @@ class StkService {
 
     async logMpesaCallback(payload) {
         try {
-            // ✅ Mapping payload values to EXACT database column names
             const { error } = await db.mpesa_callback_logs().insert([{
                 checkout_request_id: payload.checkout_id,
                 merchant_request_id: payload.merchant_id,
@@ -185,13 +185,13 @@ class StkService {
                 result_desc: payload.result_desc,
                 trans_id: payload.trans_id,
                 status: payload.result_code === 0 ? 'SUCCESS' : 'CANCELLED',
-                callback_data: payload.callback_raw, // The JSON payload
+                callback_data: payload.callback_raw,
                 metadata: payload,
                 received_at: new Date().toISOString()
             }]);
             
             if (error) console.error("❌ [CALLBACK_LOG_DB_ERROR]:", error.message);
-            else console.log("✅ [CALLBACK_LOG]: Record saved to mpesa_callback_logs with all fields!");
+            else console.log("✅ [CALLBACK_LOG]: Record saved to mpesa_callback_logs!");
         } catch (error) {
             console.error("❌ [CALLBACK_LOG_EXCEPTION]:", error.message);
         }
