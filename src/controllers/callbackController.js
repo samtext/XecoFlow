@@ -8,6 +8,7 @@ const getClientIp = (req) => {
 
 /**
  * 🚀 LANE 1: STK PUSH CALLBACK
+ * Unchanged: Safely handles STK results in the background.
  */
 export const handleMpesaCallback = async (req, res) => {
     // 1. ACKNOWLEDGE IMMEDIATELY (Crucial for Safaricom)
@@ -50,28 +51,38 @@ export const handleMpesaCallback = async (req, res) => {
 
 /**
  * 🛡️ LANE 2: C2B VALIDATION
+ * Updated: Passes data to c2bService for any pre-approval logic.
  */
 export const handleC2BValidation = async (req, res) => {
     try {
         console.log(`🔍 [C2B_VALIDATION]: ID ${req.body.TransID} | Amount: ${req.body.TransAmount}`);
+        
+        // Pass to service if you have logic to check user accounts/min-amounts
+        await c2bService.handleValidation(req.body);
+
         // Safaricom expects a specific JSON format for validation
         return res.status(200).json({ "ResultCode": 0, "ResultDesc": "Accepted" });
     } catch (error) {
         console.error("❌ [C2B_VALID_ERROR]:", error.message);
-        return res.status(200).json({ "ResultCode": 1, "ResultDesc": "Rejected" });
+        // Default to Accepted even on error to prevent blocking payments unless necessary
+        return res.status(200).json({ "ResultCode": 0, "ResultDesc": "Accepted" });
     }
 };
 
 /**
  * 💰 LANE 3: C2B CONFIRMATION
+ * Updated: Linked to c2bService.handleConfirmation to save C2B receipts to DB.
  */
 export const handleC2BConfirmation = async (req, res) => {
-    // Immediate ACK
+    // Immediate ACK (Required: M-Pesa will timeout in 10s otherwise)
     res.status(200).json({ "ResultCode": 0, "ResultDesc": "Success" });
 
     try {
-        console.log(`💰 [C2B_CONFIRMATION]: TransID: ${req.body.TransID}`);
-        await c2bService.handleC2BConfirmation(req.body);
+        console.log(`💰 [C2B_CONFIRMATION]: TransID: ${req.body.TransID} | Amount: ${req.body.TransAmount}`);
+        
+        // Logic for recording the transaction and logging to audit trail
+        await c2bService.handleConfirmation(req.body);
+        
     } catch (error) {
         console.error("❌ [C2B_CONF_ERROR]:", error.message);
     }

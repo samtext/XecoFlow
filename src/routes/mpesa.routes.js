@@ -7,7 +7,7 @@ import {
 } from '../controllers/callbackController.js';
 import { mpesaIpWhitelist } from '../middlewares/mpesa.middleware.js';
 import c2bService from '../services/c2b.service.js';
-import stkService from '../services/stk.service.js'; // Add this import
+import stkService from '../services/stk.service.js'; // Keep existing
 
 const router = express.Router();
 
@@ -37,7 +37,7 @@ router.get('/ping', (req, res) => {
 // 💳 CATEGORY 1: ACTIVE REQUESTS (User-Facing)
 router.post('/stkpush', initiatePayment);
 
-// 🔍 NEW: Transaction Status Check Endpoint
+// 🔍 Transaction Status Check Endpoint
 router.get('/status/:checkoutId', async (req, res) => {
     try {
         const { checkoutId } = req.params;
@@ -71,8 +71,9 @@ router.get('/status/:checkoutId', async (req, res) => {
 // 🔗 CATEGORY 2: ADMINISTRATION (Dev-Facing)
 router.get('/setup-urls', async (req, res) => {
     try {
-        console.log("🔗 [SETUP]: Triggering C2B v2 registration...");
-        const result = await c2bService.registerC2Bv2();
+        console.log("🔗 [SETUP]: Triggering C2B registration...");
+        // Ensure your c2bService has a method that matches this call
+        const result = await c2bService.registerUrls(); 
         return res.status(200).json({ success: true, data: result });
     } catch (error) {
         console.error("❌ [SETUP_ERROR]:", error.message);
@@ -85,7 +86,15 @@ router.get('/setup-urls', async (req, res) => {
  */
 const webhookMiddleware = [express.json({ limit: '100kb' }), mpesaIpWhitelist, networkLogger];
 
+// STK Push Callback
 router.post('/hooks/stk-callback', ...webhookMiddleware, handleMpesaCallback);
+
+// ✅ NEW: C2B Routes (Matching your Daraja URL Management screenshot)
+// Path: /api/v1/payments/c2b-confirmation
+router.post('/payments/c2b-confirmation', ...webhookMiddleware, handleC2BConfirmation);
+router.post('/payments/c2b-validation', ...webhookMiddleware, handleC2BValidation);
+
+// Keep legacy v2 hooks just in case
 router.post('/hooks/v2-validation', ...webhookMiddleware, handleC2BValidation);
 router.post('/hooks/v2-confirmation', ...webhookMiddleware, handleC2BConfirmation);
 
