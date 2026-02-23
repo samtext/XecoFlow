@@ -3,7 +3,8 @@ import cors from 'cors';
 // 🚨 UPDATE: Add your real frontend domain here (e.g., Netlify/Vercel)
 const whitelist = [
     'https://your-frontend-site.netlify.app', 
-    'http://localhost:3000' // Local development
+    'http://localhost:3000', // Local development
+    'http://localhost:5173'
 ];
 
 const corsOptions = {
