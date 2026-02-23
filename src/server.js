@@ -51,17 +51,15 @@ app.use(cors(corsOptions));
 
 /**
  * 📦 BODY PARSING
- * Safaricom sends JSON. We ensure it's parsed BEFORE any routes.
  */
 app.use(express.json({ limit: '50kb' })); 
 app.use(express.urlencoded({ extended: true }));
 
 /**
  * 🕵️ CALLBACK HANDSHAKE LOGGER
- * If Safaricom hits ANY path containing "callback" or "hooks", we log it immediately.
  */
 app.use((req, res, next) => {
-    if (req.originalUrl.includes('callback') || req.originalUrl.includes('hooks')) {
+    if (req.originalUrl.includes('callback') || req.originalUrl.includes('hooks') || req.originalUrl.includes('payments')) {
         console.log(`\n🔔 [INTERCEPTED]: ${req.method} ${req.originalUrl}`);
         console.log(`🏠 FROM IP: ${req.ip}`);
         console.log(`📦 BODY: ${JSON.stringify(req.body).substring(0, 100)}...`);
@@ -76,7 +74,11 @@ app.get('/', (req, res) => res.status(200).send('🚀 BIG-SYSTEM ENGINE: ONLINE'
  * 🛣️ ROUTES
  */
 app.use('/api/v1/auth', authRoutes);   
+
+// ✅ FIX: Mount mpesaRoutes on BOTH paths to match Daraja & Gateway logic
 app.use('/api/v1/gateway', mpesaRoutes); 
+app.use('/api/v1', mpesaRoutes); // This enables /api/v1/payments/c2b-confirmation
+
 app.use('/api/v1', apiRoutes);
 
 /**
@@ -99,6 +101,7 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n=========================================`);
     console.log(`🚀 SERVER RUNNING ON PORT ${PORT}`);
-    console.log(`🔗 CALLBACK EXPECTED AT: https://xecoflow.onrender.com/api/v1/gateway/hooks/stk-callback`);
+    console.log(`✅ C2B URL: https://xecoflow.onrender.com/api/v1/payments/c2b-confirmation`);
+    console.log(`✅ STK URL: https://xecoflow.onrender.com/api/v1/gateway/hooks/stk-callback`);
     console.log(`=========================================\n`);
 });
