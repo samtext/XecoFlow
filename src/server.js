@@ -71,15 +71,16 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => res.status(200).send('🚀 BIG-SYSTEM ENGINE: ONLINE'));
 
 /**
- * 🛣️ ROUTES
+ * 🛣️ ROUTES (Order Updated for priority)
  */
-app.use('/api/v1/auth', authRoutes);   
 
-// ✅ FIX: Mount mpesaRoutes on BOTH paths to match Daraja & Gateway logic
+// 1. Priority: M-Pesa Routes (Moved to the top to prevent 404 collision)
 app.use('/api/v1/gateway', mpesaRoutes); 
-app.use('/api/v1', mpesaRoutes); // This enables /api/v1/payments/c2b-confirmation
+app.use('/api/v1/payments', mpesaRoutes); // This ensures /api/v1/payments/c2b-confirmation works
 
-app.use('/api/v1', apiRoutes);
+// 2. Secondary: Auth and General API
+app.use('/api/v1/auth', authRoutes);   
+app.use('/api/v1', apiRoutes); 
 
 /**
  * 🛑 404 HANDLER
