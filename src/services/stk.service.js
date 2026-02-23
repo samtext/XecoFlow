@@ -156,7 +156,10 @@ class StkService {
 
     async getTransactionStatus(checkoutRequestId) {
         try {
+            // 1. Check memory cache first
             let transaction = transactions.get(checkoutRequestId);
+            
+            // 2. Check DB if not in memory
             if (!transaction) {
                 const { data } = await db.airtime_transactions()
                     .select('*')
@@ -164,10 +167,21 @@ class StkService {
                     .maybeSingle();
                 transaction = data;
             }
+            
             if (!transaction) return { success: false, status: 'NOT_FOUND', message: 'Not found' };
+            
+            // 🚀 IMPROVED FRONTEND RESPONSE: Ensure keys match what frontend expects
             return {
                 success: true,
-                status: transaction.status,
+                status: transaction.status, // PAYMENT_SUCCESS, PAYMENT_FAILED, or PENDING_PAYMENT
+                checkoutRequestId: checkoutRequestId,
+                // Provide a flat object for easier frontend consumption
+                data: {
+                    status: transaction.status,
+                    checkoutId: transaction.checkout_id,
+                    amount: transaction.amount,
+                    receipt: transaction.mpesa_receipt || null
+                },
                 transaction: { checkoutRequestId, ...transaction }
             };
         } catch (error) {
