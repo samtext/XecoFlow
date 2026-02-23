@@ -8,7 +8,7 @@ const getClientIp = (req) => {
 
 /**
  * 🚀 LANE 1: STK PUSH CALLBACK
- * Unchanged: Safely handles STK results in the background.
+ * Updated: Explicitly extracts nested IDs to prevent blank DB fields.
  */
 export const handleMpesaCallback = async (req, res) => {
     // 1. ACKNOWLEDGE IMMEDIATELY (Crucial for Safaricom)
@@ -28,7 +28,14 @@ export const handleMpesaCallback = async (req, res) => {
         }
 
         const callbackData = Body.stkCallback;
-        const { CheckoutRequestID, ResultCode, ResultDesc } = callbackData;
+        
+        // ✨ DATA EXTRACTION: These match your DB columns
+        const { 
+            CheckoutRequestID, 
+            MerchantRequestID, // Added to fix blank fields
+            ResultCode, 
+            ResultDesc 
+        } = callbackData;
 
         console.log(`📦 [TRANSACTION]: ID ${CheckoutRequestID} | Status: ${ResultCode} (${ResultDesc})`);
 
@@ -37,9 +44,13 @@ export const handleMpesaCallback = async (req, res) => {
             console.log("✅ [SUCCESS_DATA]:", JSON.stringify(callbackData.CallbackMetadata, null, 2));
         }
 
-        // Delegate to service with its own error boundary
+        // Delegate to service with enriched data object
         try {
-            await stkService.handleStkResult(callbackData);
+            // We pass the full body + the extracted IDs to ensure the service has everything
+            await stkService.handleStkResult({
+                ...callbackData,
+                full_payload: req.body // Providing the raw payload for logging
+            });
         } catch (serviceErr) {
             console.error("❌ [STK_SERVICE_ERROR]:", serviceErr.message);
         }

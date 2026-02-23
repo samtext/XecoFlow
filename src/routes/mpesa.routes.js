@@ -12,14 +12,32 @@ import stkService from '../services/stk.service.js'; // Keep existing
 const router = express.Router();
 
 /**
- * 🚦 MIDDLEWARE: Network Logger
+ * 🚦 MIDDLEWARE: Network Logger & Data Extractor
+ * This ensures MerchantRequestID and CheckoutRequestID are visible
  */
 const networkLogger = (req, res, next) => {
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+    
+    // ✨ DATA RECOVERY: If Safaricom data is nested, we pull it to req.body for the controller
+    if (req.body?.Body?.stkCallback) {
+        const cb = req.body.Body.stkCallback;
+        // We attach refinedData so your controller can find it easily
+        req.refinedData = {
+            merchantRequestId: cb.MerchantRequestID,
+            checkoutRequestId: cb.CheckoutRequestID,
+            resultCode: cb.ResultCode,
+            resultDesc: cb.ResultDesc,
+            transId: cb.CallbackMetadata?.Item?.find(i => i.Name === 'MpesaReceiptNumber')?.Value || null
+        };
+    }
+
     console.log(`\n-----------------------------------------`);
     console.log(`📡 [INCOMING]: ${req.method} ${req.originalUrl}`);
     console.log(`🏠 FROM_IP: ${clientIp}`);
     console.log(`📦 PAYLOAD: ${req.body ? 'Parsed ✅' : 'Empty ❌'}`);
+    if (req.refinedData) {
+        console.log(`🆔 ID_CHECK: ${req.refinedData.checkoutRequestId} | Code: ${req.refinedData.resultCode}`);
+    }
     console.log(`-----------------------------------------\n`);
     next();
 };
@@ -72,7 +90,6 @@ router.get('/status/:checkoutId', async (req, res) => {
 router.get('/setup-urls', async (req, res) => {
     try {
         console.log("🔗 [SETUP]: Triggering C2B registration...");
-        // Ensure your c2bService has a method that matches this call
         const result = await c2bService.registerUrls(); 
         return res.status(200).json({ success: true, data: result });
     } catch (error) {
@@ -89,12 +106,11 @@ const webhookMiddleware = [express.json({ limit: '100kb' }), mpesaIpWhitelist, n
 // STK Push Callback
 router.post('/hooks/stk-callback', ...webhookMiddleware, handleMpesaCallback);
 
-// ✅ NEW: C2B Routes (Matching your Daraja URL Management screenshot)
-// Path: /api/v1/payments/c2b-confirmation
+// ✅ NEW: C2B Routes
 router.post('/payments/c2b-confirmation', ...webhookMiddleware, handleC2BConfirmation);
 router.post('/payments/c2b-validation', ...webhookMiddleware, handleC2BValidation);
 
-// Keep legacy v2 hooks just in case
+// Keep legacy v2 hooks
 router.post('/hooks/v2-validation', ...webhookMiddleware, handleC2BValidation);
 router.post('/hooks/v2-confirmation', ...webhookMiddleware, handleC2BConfirmation);
 

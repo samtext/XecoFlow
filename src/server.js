@@ -56,13 +56,27 @@ app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: true }));
 
 /**
- * 🕵️ CALLBACK HANDSHAKE LOGGER
+ * 🕵️ CALLBACK HANDSHAKE LOGGER & DATA REFINER
+ * This section is responsible for fixing the "Empty Fields" by flattening the Safaricom body
  */
 app.use((req, res, next) => {
     if (req.originalUrl.includes('callback') || req.originalUrl.includes('hooks') || req.originalUrl.includes('payments')) {
         console.log(`\n🔔 [INTERCEPTED]: ${req.method} ${req.originalUrl}`);
         console.log(`🏠 FROM IP: ${req.ip}`);
-        console.log(`📦 BODY: ${JSON.stringify(req.body).substring(0, 100)}...`);
+        
+        // ✨ DATA REFINER: If this is an STK callback, ensure IDs are at the top level
+        if (req.body?.Body?.stkCallback) {
+            const cb = req.body.Body.stkCallback;
+            req.mpesaData = {
+                merchantRequestId: cb.MerchantRequestID,
+                checkoutRequestId: cb.CheckoutRequestID,
+                resultCode: cb.ResultCode,
+                resultDesc: cb.ResultDesc,
+                // Extract TransID if it exists (Success only)
+                transId: cb.CallbackMetadata?.Item?.find(i => i.Name === 'MpesaReceiptNumber')?.Value || null
+            };
+            console.log(`📦 REFINED DATA: ID ${req.mpesaData.checkoutRequestId} | Code: ${req.mpesaData.resultCode}`);
+        }
     }
     next();
 });
@@ -76,7 +90,7 @@ app.get('/', (req, res) => res.status(200).send('🚀 BIG-SYSTEM ENGINE: ONLINE'
 
 // 1. Priority: M-Pesa Routes (Moved to the top to prevent 404 collision)
 app.use('/api/v1/gateway', mpesaRoutes); 
-app.use('/api/v1/payments', mpesaRoutes); // This ensures /api/v1/payments/c2b-confirmation works
+app.use('/api/v1/payments', mpesaRoutes); 
 
 // 2. Secondary: Auth and General API
 app.use('/api/v1/auth', authRoutes);   
