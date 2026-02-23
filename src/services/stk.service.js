@@ -53,9 +53,11 @@ class StkService {
             );
 
             const checkoutId = response.data.CheckoutRequestID;
+            const merchantId = response.data.MerchantRequestID; // Added for tracking
             
             const transactionData = {
                 checkout_id: checkoutId,
+                merchant_id: merchantId, // Added for memory tracking
                 phone_number: cleanPhone,
                 amount: amount,
                 user_id: userId,
@@ -97,7 +99,8 @@ class StkService {
     }
 
     async handleStkResult(callbackData) {
-        const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = callbackData;
+        // ✨ Extraction logic to fix blank fields
+        const { CheckoutRequestID, MerchantRequestID, ResultCode, ResultDesc, CallbackMetadata } = callbackData;
         
         console.log(`\n📝 [CALLBACK_RECEIVED]: ${CheckoutRequestID}`);
         console.log(`📊 Result: ${ResultCode} (${ResultDesc})`);
@@ -116,9 +119,10 @@ class StkService {
                 updated_at: new Date().toISOString()
             };
             
+            let mpesaReceipt = null;
             if (ResultCode === 0) {
                 const metadata = CallbackMetadata?.Item || [];
-                const mpesaReceipt = metadata.find(i => i.Name === 'MpesaReceiptNumber')?.Value;
+                mpesaReceipt = metadata.find(i => i.Name === 'MpesaReceiptNumber')?.Value;
                 updateData.mpesa_receipt = mpesaReceipt;
             }
 
@@ -132,11 +136,13 @@ class StkService {
                 console.error("❌ [DB_UPDATE_EXCEPTION]:", dbError.message);
             }
 
-            // Audit Trail
+            // ✅ Pass explicit fields to the logger to ensure DB columns are NOT blank
             await this.logMpesaCallback({
                 checkout_id: CheckoutRequestID,
+                merchant_id: MerchantRequestID,
                 result_code: ResultCode,
                 result_desc: ResultDesc,
+                trans_id: mpesaReceipt,
                 callback_raw: callbackData
             });
 
@@ -171,15 +177,21 @@ class StkService {
 
     async logMpesaCallback(payload) {
         try {
-            // ✅ We insert into both columns to ensure the insert works regardless of cache status
+            // ✅ Mapping payload values to EXACT database column names
             const { error } = await db.mpesa_callback_logs().insert([{
-                callback_data: payload, 
+                checkout_request_id: payload.checkout_id,
+                merchant_request_id: payload.merchant_id,
+                result_code: payload.result_code,
+                result_desc: payload.result_desc,
+                trans_id: payload.trans_id,
+                status: payload.result_code === 0 ? 'SUCCESS' : 'CANCELLED',
+                callback_data: payload.callback_raw, // The JSON payload
                 metadata: payload,
                 received_at: new Date().toISOString()
             }]);
             
             if (error) console.error("❌ [CALLBACK_LOG_DB_ERROR]:", error.message);
-            else console.log("✅ [CALLBACK_LOG]: Record saved to mpesa_callback_logs");
+            else console.log("✅ [CALLBACK_LOG]: Record saved to mpesa_callback_logs with all fields!");
         } catch (error) {
             console.error("❌ [CALLBACK_LOG_EXCEPTION]:", error.message);
         }
