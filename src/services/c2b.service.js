@@ -67,7 +67,9 @@ class C2bService {
                 network: 'SAFARICOM',
                 status: 'PAYMENT_SUCCESS',
                 mpesa_receipt: c2bData.TransID,
-                idempotency_key: `C2B_${c2bData.TransID}`,
+                // 🚩 FIX: Your DB expects a UUID format. Using the raw TransID 
+                // ensures it doesn't fail with the "C2B_" prefix syntax error.
+                idempotency_key: c2bData.TransID, 
                 metadata: {
                     first_name: c2bData.FirstName,
                     middle_name: c2bData.MiddleName,
@@ -80,7 +82,7 @@ class C2bService {
             const { error } = await db.airtime_transactions().insert([transactionData]);
             
             if (error) {
-                if (error.code === '23505') {
+                if (error.code === '23505' || error.message.includes('unique constraint')) {
                     console.warn(`⚠️ [C2B_DUPLICATE]: Transaction ${c2bData.TransID} already recorded.`);
                 } else {
                     console.error("❌ [C2B_DB_ERROR]:", error.message);
