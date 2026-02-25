@@ -3,19 +3,29 @@ import { db } from '../config/db.js';
 
 class AggregatorService {
     constructor() {
-        this.apiKey = process.env.AGGREGATOR_API_KEY;
-        this.secretKey = process.env.AGGREGATOR_SECRET_KEY;
-        this.baseUrl = process.env.AGGREGATOR_BASE_URL;
+        // Defensive check: Ensure variables exist to avoid .trim() or .replace() crashes
+        this.apiKey = process.env.AGGREGATOR_API_KEY || '';
+        this.secretKey = process.env.AGGREGATOR_SECRET_KEY || '';
+        this.baseUrl = process.env.AGGREGATOR_BASE_URL || 'https://api.statum.co.ke';
     }
 
     /**
      * 💰 FETCH BALANCE & LOG TO LEDGER
-     * This now automatically logs a record to the ledger if the balance is fetched.
      */
     async fetchProviderBalance() {
         try {
+            // 🛑 CRASH PROTECTION: Check if baseUrl is valid before calling .replace()
+            if (!this.baseUrl) {
+                throw new Error("AGGREGATOR_BASE_URL is not defined in environment variables");
+            }
+
             const cleanBaseUrl = this.baseUrl.replace(/\/+$/, '');
             const url = `${cleanBaseUrl}/account-details`;
+
+            // 🛑 CRASH PROTECTION: Ensure API Keys exist before calling .trim()
+            if (!this.apiKey || !this.secretKey) {
+                throw new Error("Statum API Key or Secret is missing");
+            }
 
             const authString = Buffer.from(
                 `${this.apiKey.trim()}:${this.secretKey.trim()}`
@@ -27,16 +37,17 @@ class AggregatorService {
                 headers: { 
                     'Authorization': `Basic ${authString}`,
                     'Content-Type': 'application/json'
-                }
+                },
+                timeout: 10000 // Added timeout to prevent hanging
             });
 
+            // Navigate the response path safely
             const balance = response.data?.organization?.details?.available_balance ?? 0;
             const parsedBalance = parseFloat(balance);
 
             console.log(`✅ [STATUM]: Balance retrieved: KES ${parsedBalance}`);
 
-            // 📝 LOG THIS SYNC TO LEDGER (Optional, but keeps history accurate)
-            // We use 0 amount because it's just a check/sync.
+            // 📝 LOG THIS SYNC TO LEDGER
             await this.logFloatChange(0, 'CREDIT', parsedBalance, "Manual Balance Sync/Pull");
 
             return { 
@@ -45,25 +56,22 @@ class AggregatorService {
             };
 
         } catch (error) {
-            const errorData = error.response?.data || error.message;
-            console.error("❌ [STATUM_V2_ERROR]:", errorData);
+            // Refined error logging
+            const errorMessage = error.response?.data?.description || error.message;
+            console.error("❌ [STATUM_V2_ERROR]:", errorMessage);
             
             return { 
                 success: false, 
-                error: errorData?.description || "Failed to fetch Statum balance" 
+                error: errorMessage || "Failed to fetch Statum balance" 
             };
         }
     }
 
     /**
      * 📝 LEDGER LOGGER
-     * Matches the public.provider_float_ledger schema.
      */
     async logFloatChange(amount, type, balanceAfter, description, disbursementId = null) {
         try {
-            // According to your schema, type must be 'DEBIT' or 'CREDIT'
-            // If it's a DEBIT (spending), balance_before was higher.
-            // If it's a CREDIT (top-up or sync), balance_before was lower or same.
             let balanceBefore;
             if (type === 'DEBIT') {
                 balanceBefore = balanceAfter + amount;
@@ -73,7 +81,7 @@ class AggregatorService {
 
             const { error } = await db.from('provider_float_ledger').insert([{
                 provider_name: 'STATUM',
-                transaction_type: type, // 'DEBIT' or 'CREDIT'
+                transaction_type: type, 
                 amount: amount,
                 balance_before: balanceBefore,
                 balance_after: balanceAfter,
