@@ -8,6 +8,23 @@ import authRoutes from './routes/authRoutes.js';
 const app = express();
 
 /**
+ * 🚨 GLOBAL DEBUGGER: Catch-All Logger
+ * This logs every single hit to your server before any logic happens.
+ */
+app.use((req, res, next) => {
+    console.log(`\n📡 [INCOMING_REQUEST]: ${req.method} ${req.originalUrl}`);
+    console.log(`📂 Headers: ${JSON.stringify(req.headers, null, 2)}`);
+    
+    // Log the raw body for POST requests to see what Safaricom is sending
+    if (req.method === 'POST') {
+        // Note: Body might be empty here if express.json() hasn't run yet, 
+        // but we'll see the URL and Headers regardless.
+        console.log(`📦 Body Context: ${JSON.stringify(req.body || {}, null, 2)}`);
+    }
+    next();
+});
+
+/**
  * 🔐 CORS CONFIGURATION
  */
 const allowedOrigins = [
@@ -22,10 +39,8 @@ const allowedOrigins = [
 
 const corsOptions = {
     origin: (origin, callback) => {
-        // 1. Allow requests with no origin (like mobile apps or curl)
         if (!origin) return callback(null, true);
         
-        // 2. Check if the origin is in our allowed list
         const isAllowed = allowedOrigins.some(o => origin.startsWith(o)) || 
                           origin.includes('localhost') || 
                           origin.includes('127.0.0.1');
@@ -33,10 +48,8 @@ const corsOptions = {
         if (isAllowed) {
             callback(null, true);
         } else {
-            // 💡 Better for Debugging: Log it but don't throw a hard Error object 
-            // which can crash the middleware chain.
             console.warn(`⚠️ [CORS_REJECTED]: ${origin}`);
-            callback(null, false); // Just say 'no' instead of erroring
+            callback(null, false);
         }
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -45,10 +58,7 @@ const corsOptions = {
     optionsSuccessStatus: 200
 };
 
-// Apply CORS
 app.use(cors(corsOptions));
-
-// 🛡️ Handle Pre-flight for all routes (Browser requirement for custom headers)
 app.options('*', cors(corsOptions));
 
 /**
@@ -63,12 +73,12 @@ app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: true }));
 
 /**
- * 🕵️ CALLBACK LOGS
+ * 🕵️ CALLBACK LOGS (Existing logic preserved)
  */
 app.use((req, res, next) => {
     const url = req.originalUrl;
     if (url.includes('callback') || url.includes('payments')) {
-        console.log(`🔔 [REQUEST]: ${req.method} ${url}`);
+        console.log(`🔔 [CALLBACK_DEBUG]: ${req.method} ${url}`);
     }
     next();
 });

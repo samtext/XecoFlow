@@ -13,7 +13,7 @@ const fakePayment = {
     "TransID": "FAKE" + Math.random().toString(36).substring(2, 10).toUpperCase(),
     "TransTime": new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14),
     "TransAmount": "10.00",
-    "BusinessShortCode": "7450249",
+    "BusinessShortCode": "9203342",
     "BillRefNumber": "TEST_LINE_2",
     "MSISDN": "254700000000",
     "FirstName": "Fake",
