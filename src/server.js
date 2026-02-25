@@ -8,15 +8,14 @@ import authRoutes from './routes/authRoutes.js';
 const app = express();
 
 /**
- * 🛠️ LOG FLUSHER
+ * 🛠️ LOG FLUSHER (Cleaned up for better Render readability)
  */
-const originalLog = console.log;
-console.log = (...args) => {
-    originalLog(...args);
-    if (process.env.NODE_ENV === 'production') {
-        process.stdout.write(''); 
-    }
-};
+if (process.env.NODE_ENV === 'production') {
+    const originalLog = console.log;
+    console.log = (...args) => {
+        originalLog(...args);
+    };
+}
 
 /**
  * 🛡️ PROXY TRUST (CRITICAL FOR RENDER)
@@ -25,18 +24,20 @@ app.set('trust proxy', 1);
 
 /**
  * 🔐 CORS CONFIGURATION
- * Updated to allow both local development and your live Render frontend.
+ * Improved to explicitly catch common local/production origin variations
  */
 const allowedOrigins = [
-    'https://xecoflow.onrender.com',      // Backend/Frontend URL
+    'https://xecoflow.onrender.com',      // Your Render Domain
     'http://localhost:3000', 
-    'http://localhost:5173',              // Default Vite port
-    'http://localhost:5174'
+    'http://localhost:5173',              // Vite
+    'http://localhost:5174',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174'
 ];
 
 const corsOptions = {
     origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps or curl)
+        // Allow requests with no origin (like postman, curl, or same-origin)
         if (!origin) return callback(null, true);
         
         const isAllowed = allowedOrigins.some(o => origin.startsWith(o)) || 
@@ -46,12 +47,13 @@ const corsOptions = {
         if (isAllowed) {
             callback(null, true);
         } else {
+            // This will show up in your Render Logs so you can see what URL is being blocked
             console.error(`🚫 [CORS_BLOCKED]: Origin ${origin} is not in allowed list.`);
             callback(new Error('Not allowed by CORS Security Policy'));
         }
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
     credentials: true,
     optionsSuccessStatus: 200
 };
@@ -68,8 +70,9 @@ app.use(express.urlencoded({ extended: true }));
  * 🕵️ CALLBACK HANDSHAKE LOGGER & DATA REFINER
  */
 app.use((req, res, next) => {
-    if (req.originalUrl.includes('callback') || req.originalUrl.includes('hooks') || req.originalUrl.includes('payments')) {
-        console.log(`\n🔔 [INTERCEPTED]: ${req.method} ${req.originalUrl}`);
+    const url = req.originalUrl;
+    if (url.includes('callback') || url.includes('hooks') || url.includes('payments')) {
+        console.log(`\n🔔 [INTERCEPTED]: ${req.method} ${url}`);
         
         if (req.body?.Body?.stkCallback) {
             const cb = req.body.Body.stkCallback;
@@ -110,7 +113,10 @@ app.use((req, res) => {
  */
 app.use((err, req, res, next) => {
     console.error('❌ [GLOBAL_ERROR]:', err.message);
-    res.status(500).json({ error: "Internal Server Error" });
+    res.status(500).json({ 
+        error: "Internal Server Error",
+        message: process.env.NODE_ENV === 'development' ? err.message : undefined 
+    });
 });
 
 const PORT = process.env.PORT || 5000;
