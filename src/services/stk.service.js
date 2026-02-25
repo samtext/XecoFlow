@@ -8,6 +8,19 @@ import crypto from 'crypto'; // Ensure crypto is imported for idempotency_key
 const transactions = new Map();
 
 class StkService {
+    /**
+     * 🔐 NEW: Wrapper for OAuth Token
+     * This fixes the "getOAuthToken is not a function" error in c2bService
+     */
+    async getOAuthToken() {
+        try {
+            return await mpesaAuth.getAccessToken();
+        } catch (error) {
+            console.error("❌ [TOKEN_WRAPPER_ERROR]:", error.message);
+            throw error;
+        }
+    }
+
     async initiateSTKPush(phoneNumber, amount, userId, packageId = "default") {
         try {
             const accessToken = await mpesaAuth.getAccessToken();
@@ -58,14 +71,12 @@ class StkService {
             
             const transactionData = {
                 checkout_id: checkoutId,
-                // merchant_id: merchantId, // ❌ Removed to prevent DB error if column is missing
                 phone_number: cleanPhone,
                 amount: amount,
                 user_id: userId,
                 network: 'SAFARICOM', 
                 status: 'PENDING_PAYMENT', 
                 idempotency_key: crypto.randomUUID(), 
-                // ✅ We store merchant_id here so the insert doesn't fail
                 metadata: { 
                     package_id: packageId,
                     merchant_id: merchantId 
@@ -156,10 +167,8 @@ class StkService {
 
     async getTransactionStatus(checkoutRequestId) {
         try {
-            // 1. Check memory cache first
             let transaction = transactions.get(checkoutRequestId);
             
-            // 2. Check DB if not in memory
             if (!transaction) {
                 const { data } = await db.airtime_transactions()
                     .select('*')
@@ -170,12 +179,10 @@ class StkService {
             
             if (!transaction) return { success: false, status: 'NOT_FOUND', message: 'Not found' };
             
-            // 🚀 IMPROVED FRONTEND RESPONSE: Ensure keys match what frontend expects
             return {
                 success: true,
-                status: transaction.status, // PAYMENT_SUCCESS, PAYMENT_FAILED, or PENDING_PAYMENT
+                status: transaction.status,
                 checkoutRequestId: checkoutRequestId,
-                // Provide a flat object for easier frontend consumption
                 data: {
                     status: transaction.status,
                     checkoutId: transaction.checkout_id,

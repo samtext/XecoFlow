@@ -11,7 +11,7 @@ class C2bService {
         const url = "https://api.safaricom.co.ke/mpesa/c2b/v2/registerurl";
         
         try {
-            // 1. Get OAuth Token (Assuming stkService has the token logic)
+            // 1. Get OAuth Token (reusing logic from stkService)
             const token = await stkService.getOAuthToken();
             
             const body = {
@@ -90,6 +90,7 @@ class C2bService {
 
         } catch (error) {
             console.error("❌ [C2B_HANDLER_EXCEPTION]:", error.message);
+            // Return Accepted to Safaricom even on internal error to stop retries
             return { ResultCode: 0, ResultDesc: "Accepted" };
         }
     }
@@ -104,4 +105,5 @@ class C2bService {
     }
 }
 
+// 🔐 Export as a singleton instance
 export default new C2bService();
