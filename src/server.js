@@ -8,28 +8,13 @@ import authRoutes from './routes/authRoutes.js';
 const app = express();
 
 /**
- * 🛠️ LOG FLUSHER (Cleaned up for better Render readability)
- */
-if (process.env.NODE_ENV === 'production') {
-    const originalLog = console.log;
-    console.log = (...args) => {
-        originalLog(...args);
-    };
-}
-
-/**
- * 🛡️ PROXY TRUST (CRITICAL FOR RENDER)
- */
-app.set('trust proxy', 1); 
-
-/**
  * 🔐 CORS CONFIGURATION
- * Improved to explicitly catch common local/production origin variations
  */
 const allowedOrigins = [
-    'https://xecoflow.onrender.com',      // Your Render Domain
+    'https://xecoflow.onrender.com',      // Backend
+    'https://xecoflow-ui.onrender.com',   // 👈 REPLACE WITH YOUR ACTUAL FRONTEND RENDER URL
     'http://localhost:3000', 
-    'http://localhost:5173',              // Vite
+    'http://localhost:5173', 
     'http://localhost:5174',
     'http://127.0.0.1:5173',
     'http://127.0.0.1:5174'
@@ -37,9 +22,10 @@ const allowedOrigins = [
 
 const corsOptions = {
     origin: (origin, callback) => {
-        // Allow requests with no origin (like postman, curl, or same-origin)
+        // 1. Allow requests with no origin (like mobile apps or curl)
         if (!origin) return callback(null, true);
         
+        // 2. Check if the origin is in our allowed list
         const isAllowed = allowedOrigins.some(o => origin.startsWith(o)) || 
                           origin.includes('localhost') || 
                           origin.includes('127.0.0.1');
@@ -47,9 +33,10 @@ const corsOptions = {
         if (isAllowed) {
             callback(null, true);
         } else {
-            // This will show up in your Render Logs so you can see what URL is being blocked
-            console.error(`🚫 [CORS_BLOCKED]: Origin ${origin} is not in allowed list.`);
-            callback(new Error('Not allowed by CORS Security Policy'));
+            // 💡 Better for Debugging: Log it but don't throw a hard Error object 
+            // which can crash the middleware chain.
+            console.warn(`⚠️ [CORS_REJECTED]: ${origin}`);
+            callback(null, false); // Just say 'no' instead of erroring
         }
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -58,7 +45,16 @@ const corsOptions = {
     optionsSuccessStatus: 200
 };
 
+// Apply CORS
 app.use(cors(corsOptions));
+
+// 🛡️ Handle Pre-flight for all routes (Browser requirement for custom headers)
+app.options('*', cors(corsOptions));
+
+/**
+ * 🛡️ PROXY TRUST (CRITICAL FOR RENDER)
+ */
+app.set('trust proxy', 1); 
 
 /**
  * 📦 BODY PARSING
@@ -67,30 +63,18 @@ app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: true }));
 
 /**
- * 🕵️ CALLBACK HANDSHAKE LOGGER & DATA REFINER
+ * 🕵️ CALLBACK LOGS
  */
 app.use((req, res, next) => {
     const url = req.originalUrl;
-    if (url.includes('callback') || url.includes('hooks') || url.includes('payments')) {
-        console.log(`\n🔔 [INTERCEPTED]: ${req.method} ${url}`);
-        
-        if (req.body?.Body?.stkCallback) {
-            const cb = req.body.Body.stkCallback;
-            req.mpesaData = {
-                merchantRequestId: cb.MerchantRequestID,
-                checkoutRequestId: cb.CheckoutRequestID,
-                resultCode: cb.ResultCode,
-                resultDesc: cb.ResultDesc,
-                transId: cb.CallbackMetadata?.Item?.find(i => i.Name === 'MpesaReceiptNumber')?.Value || null
-            };
-            console.log(`📦 REFINED DATA: ID ${req.mpesaData.checkoutRequestId} | Code: ${req.mpesaData.resultCode}`);
-        }
+    if (url.includes('callback') || url.includes('payments')) {
+        console.log(`🔔 [REQUEST]: ${req.method} ${url}`);
     }
     next();
 });
 
-// 2. Health Check
-app.get('/', (req, res) => res.status(200).send('🚀 BIG-SYSTEM ENGINE: ONLINE'));
+// Health Check
+app.get('/', (req, res) => res.status(200).send('🚀 ENGINE: ONLINE'));
 
 /**
  * 🛣️ ROUTES
@@ -101,28 +85,18 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1', apiRoutes); 
 
 /**
- * 🛑 404 HANDLER
+ * 🛑 404 & ERROR HANDLING
  */
 app.use((req, res) => {
-    console.warn(`⚠️ [404]: ${req.method} ${req.originalUrl}`);
     res.status(404).json({ error: `Endpoint ${req.originalUrl} not found.` });
 });
 
-/**
- * 🔥 GLOBAL ERROR HANDLER
- */
 app.use((err, req, res, next) => {
-    console.error('❌ [GLOBAL_ERROR]:', err.message);
-    res.status(500).json({ 
-        error: "Internal Server Error",
-        message: process.env.NODE_ENV === 'development' ? err.message : undefined 
-    });
+    console.error('❌ [ERROR]:', err.message);
+    res.status(500).json({ error: "Internal Server Error" });
 });
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n=========================================`);
-    console.log(`🚀 SERVER RUNNING ON PORT ${PORT}`);
-    console.log(`✅ LIVE URL: https://xecoflow.onrender.com`);
-    console.log(`=========================================\n`);
+    console.log(`🚀 SERVER LIVE: Port ${PORT}`);
 });
