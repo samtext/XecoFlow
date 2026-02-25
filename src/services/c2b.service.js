@@ -1,29 +1,28 @@
 import { db } from '../config/db.js';
 import axios from 'axios'; 
 import stkService from './stk.service.js'; 
-import mpesaConfig from '../config/mpesa.js'; // ✅ Added to fix the 'undefined' ShortCode
+import mpesaConfig from '../config/mpesa.js'; 
 
 class C2bService {
     /**
-     * 🚀 REGISTER URLS (v2): As requested by Safaricom Support
-     * This registers your Confirmation and Validation endpoints with Safaricom.
+     * 🚀 REGISTER URLS (v2): Mapping to the Store Number
+     * For Till Number 4938110, we register using Store Number 9203342.
      */
     async registerUrls() {
         const url = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
         
         try {
-            // 1. Get OAuth Token (reusing logic from stkService)
             const token = await stkService.getOAuthToken();
             
             const body = {
-                // 🚩 FIX: Using config object to ensure ShortCode is not undefined
-                ShortCode: mpesaConfig.shortCode, 
+                // 🚩 CRITICAL: For Buy Goods Tills, use the STORE NUMBER here
+                ShortCode: "9203342", 
                 ResponseType: "Completed",
                 ConfirmationURL: "https://xecoflow.onrender.com/api/v1/gateway/payments/c2b-confirmation",
                 ValidationURL: "https://xecoflow.onrender.com/api/v1/gateway/payments/c2b-validation"
             };
 
-            console.log(`📡 [C2B_REGISTRATION]: Requesting v2 for ShortCode: ${body.ShortCode}`);
+            console.log(`📡 [C2B_REGISTRATION]: Mapping Store Number: ${body.ShortCode} for Till: 4938110`);
 
             const response = await axios.post(url, body, {
                 headers: { 
@@ -35,7 +34,6 @@ class C2bService {
             console.log("✅ [C2B_REGISTRATION_SUCCESS]:", response.data);
             return response.data;
         } catch (error) {
-            // Log the detailed error from Safaricom if available
             const errorDetail = error.response?.data || error.message;
             console.error("❌ [C2B_REGISTRATION_ERROR]:", JSON.stringify(errorDetail, null, 2));
             throw new Error(error.response?.data?.errorMessage || "Failed to register C2B URLs");
@@ -43,24 +41,25 @@ class C2bService {
     }
 
     /**
-     * 💰 CONFIRMATION: This is where the money is recorded.
+     * 💰 CONFIRMATION: Saves the transaction to Supabase
      */
     async handleConfirmation(c2bData) {
-        console.log(`\n💰 [C2B_RECEIPT]: ${c2bData.TransID} | Amount: ${c2bData.TransAmount}`);
+        // Log the incoming data clearly for debugging
+        console.log(`\n💰 [C2B_RECEIPT]: ${c2bData.TransID} | Amount: ${c2bData.TransAmount} | From: ${c2bData.MSISDN}`);
 
         try {
-            // 1. Audit Log: Use the UUID-based logging
+            // 1. Log the raw callback for audit purposes
             await db.mpesa_callback_logs().insert([{
                 callback_data: c2bData,
                 metadata: { 
                     type: 'C2B_CONFIRMATION', 
                     msisdn: c2bData.MSISDN,
-                    bill_ref: c2bData.BillRefNumber 
+                    till_paid: c2bData.BusinessShortCode // This should show your Till or Store number
                 },
                 received_at: new Date().toISOString()
             }]);
 
-            // 2. Transaction Record
+            // 2. Insert into Airtime Transactions table
             const transactionData = {
                 checkout_id: c2bData.TransID,
                 phone_number: c2bData.MSISDN,
@@ -73,7 +72,7 @@ class C2bService {
                     first_name: c2bData.FirstName,
                     middle_name: c2bData.MiddleName,
                     last_name: c2bData.LastName,
-                    bill_ref: c2bData.BillRefNumber
+                    bill_ref: c2bData.BillRefNumber // In Tills, this is often the MSISDN or 'Leave Blank'
                 },
                 updated_at: new Date().toISOString()
             };
@@ -82,27 +81,28 @@ class C2bService {
             
             if (error) {
                 if (error.code === '23505') {
-                    console.warn(`⚠️ [C2B_DUPLICATE]: Transaction ${c2bData.TransID} already exists.`);
+                    console.warn(`⚠️ [C2B_DUPLICATE]: Transaction ${c2bData.TransID} already recorded.`);
                 } else {
                     console.error("❌ [C2B_DB_ERROR]:", error.message);
                 }
             } else {
-                console.log(`✅ [C2B_SUCCESS]: Saved transaction ${c2bData.TransID}`);
+                console.log(`✅ [C2B_SUCCESS]: Recorded ${c2bData.TransID} in database.`);
             }
 
             return { ResultCode: 0, ResultDesc: "Success" };
 
         } catch (error) {
             console.error("❌ [C2B_HANDLER_EXCEPTION]:", error.message);
+            // We tell Safaricom "Accepted" even on error to stop them from retrying the same hit
             return { ResultCode: 0, ResultDesc: "Accepted" };
         }
     }
 
     /**
-     * 🔍 VALIDATION
+     * 🔍 VALIDATION: Auto-accepts the payment
      */
     async handleValidation(data) {
-        console.log("🔍 [C2B_VALIDATION]: Checking payment...", data.TransID);
+        console.log("🔍 [C2B_VALIDATION]: Handshake for TransID:", data.TransID);
         return { ResultCode: 0, ResultDesc: "Accepted" };
     }
 }
