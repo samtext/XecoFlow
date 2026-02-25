@@ -1,6 +1,7 @@
 import { db } from '../config/db.js';
-import axios from 'axios'; // Ensure axios is installed: npm install axios
-import stkService from './stk.service.js'; // To reuse getOAuthToken logic
+import axios from 'axios'; 
+import stkService from './stk.service.js'; 
+import mpesaConfig from '../config/mpesa.js'; // ✅ Added to fix the 'undefined' ShortCode
 
 class C2bService {
     /**
@@ -8,20 +9,21 @@ class C2bService {
      * This registers your Confirmation and Validation endpoints with Safaricom.
      */
     async registerUrls() {
-        const url = "https://api.safaricom.co.ke/mpesa/c2b/v2/registerurl";
+        const url = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
         
         try {
             // 1. Get OAuth Token (reusing logic from stkService)
             const token = await stkService.getOAuthToken();
             
             const body = {
-                ShortCode: process.env.BUSINESS_SHORT_CODE,
+                // 🚩 FIX: Using config object to ensure ShortCode is not undefined
+                ShortCode: mpesaConfig.shortCode, 
                 ResponseType: "Completed",
                 ConfirmationURL: "https://xecoflow.onrender.com/api/v1/gateway/payments/c2b-confirmation",
                 ValidationURL: "https://xecoflow.onrender.com/api/v1/gateway/payments/c2b-validation"
             };
 
-            console.log("📡 [C2B_REGISTRATION]: Requesting v2 for ShortCode:", body.ShortCode);
+            console.log(`📡 [C2B_REGISTRATION]: Requesting v2 for ShortCode: ${body.ShortCode}`);
 
             const response = await axios.post(url, body, {
                 headers: { 
@@ -33,7 +35,9 @@ class C2bService {
             console.log("✅ [C2B_REGISTRATION_SUCCESS]:", response.data);
             return response.data;
         } catch (error) {
-            console.error("❌ [C2B_REGISTRATION_ERROR]:", error.response?.data || error.message);
+            // Log the detailed error from Safaricom if available
+            const errorDetail = error.response?.data || error.message;
+            console.error("❌ [C2B_REGISTRATION_ERROR]:", JSON.stringify(errorDetail, null, 2));
             throw new Error(error.response?.data?.errorMessage || "Failed to register C2B URLs");
         }
     }
@@ -90,7 +94,6 @@ class C2bService {
 
         } catch (error) {
             console.error("❌ [C2B_HANDLER_EXCEPTION]:", error.message);
-            // Return Accepted to Safaricom even on internal error to stop retries
             return { ResultCode: 0, ResultDesc: "Accepted" };
         }
     }
@@ -100,10 +103,8 @@ class C2bService {
      */
     async handleValidation(data) {
         console.log("🔍 [C2B_VALIDATION]: Checking payment...", data.TransID);
-        // Business Logic: Accept all payments by default
         return { ResultCode: 0, ResultDesc: "Accepted" };
     }
 }
 
-// 🔐 Export as a singleton instance
 export default new C2bService();
