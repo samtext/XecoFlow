@@ -1,11 +1,16 @@
 import aggregatorService from '../services/aggregator.service.js';
 import { db } from '../config/db.js';
 
+/**
+ * 💰 GET PROVIDER BALANCE
+ * Logic: Pulls live balance from Statum and records a 'CREDIT' entry with 0 amount
+ * to update the ledger history without violating DB constraints.
+ */
 export const getProviderBalance = async (req, res) => {
     try {
         console.log("📊 [ADMIN]: Requesting provider balance update...");
         
-        // 1. Fetch from Provider API
+        // 1. Fetch from Statum V2 API
         const balanceResult = await aggregatorService.fetchProviderBalance();
 
         if (!balanceResult.success) {
@@ -17,22 +22,21 @@ export const getProviderBalance = async (req, res) => {
             });
         }
 
-        // 2. Log the pull in provider_float_ledger
-        // We use 'STATUM' to match your ledger entries
+        // 2. Log the sync in provider_float_ledger
+        // NOTE: Using 'CREDIT' with 0 amount because your SQL check constraint 
+        // only allows ('DEBIT', 'CREDIT')
         try {
             await aggregatorService.logFloatChange(
-                0,                  // No change in amount for a refresh
-                'PULL',
+                0,                                  // No financial change
+                'CREDIT',                           // Complies with DB CHECK constraint
                 balanceResult.balance,
-                'Manual balance refresh from admin dashboard'
+                'Manual balance sync from dashboard'
             );
         } catch (logError) {
-            // We log the error but don't stop the response 
-            // because we already have the balance successfully
-            console.warn("⚠️ [LEDGER_LOG_WARNING]: Balance fetched but logging failed", logError.message);
+            console.warn("⚠️ [LEDGER_LOG_WARNING]: Balance fetched but ledger update failed", logError.message);
         }
 
-        // 3. Send successful response
+        // 3. Send clean response to Frontend
         return res.status(200).json({
             success: true,
             balance: balanceResult.balance,
@@ -50,10 +54,12 @@ export const getProviderBalance = async (req, res) => {
 };
 
 /**
- * Get the history of float changes for the admin dashboard
+ * 📒 GET FLOAT LEDGER
+ * Fetches the most recent 50 entries from the provider_float_ledger table
  */
 export const getFloatLedger = async (req, res) => {
     try {
+        // Fetch ledger history sorted by newest first
         const { data, error } = await db.from('provider_float_ledger')
             .select('*')
             .order('created_at', { ascending: false })
