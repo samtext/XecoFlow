@@ -1,43 +1,33 @@
 import axios from 'axios';
+import mpesaAuth from './src/services/mpesa.auth.js'; 
 
-const CONSUMER_KEY = 'mdJODSyrjeUMBvWI9E7U937YyT2W8hB0jdJST4EeablPXCqF';
-const CONSUMER_SECRET = 'oeoT4MN0AMxbKGc2wlsJgZATMeDNLuYtRYuFFU5wr7eqKwPx338L3pTYL2Kn6iuC';
-
-// 📍 Use the Short Code shown in your Daraja screenshot
-const SHORTCODE = '7450249'; 
-
-const AUTH_URL = 'https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials';
-// ✅ CHANGED TO V2 to match your app's products
-const REGISTER_URL = 'https://api.safaricom.co.ke/mpesa/c2b/v2/registerurl';
-
-async function registerV2() {
+const registerURL = async () => {
     try {
-        console.log("🔐 Fetching Production Token...");
-        const auth = Buffer.from(`${CONSUMER_KEY}:${CONSUMER_SECRET}`).toString('base64');
-        const tokenRes = await axios.get(AUTH_URL, {
-            headers: { Authorization: `Basic ${auth}` }
-        });
-        const token = tokenRes.data.access_token;
+        // 1. Get Token
+        const token = await mpesaAuth.getAccessToken();
+        
+        // 2. USE PRODUCTION URL (api.safaricom.co.ke)
+        const url = "https://api.safaricom.co.ke/mpesa/c2b/v1/registerurl";
+        
+        console.log(`🚀 [MPESA]: Attempting registration for Store: ${process.env.MPESA_STORE_NUMBER}`);
 
-        console.log(`📡 Registering C2B v2 URLs for ${SHORTCODE}...`);
-        const data = {
-            ShortCode: SHORTCODE,
-            ResponseType: "Completed",
-            ConfirmationURL: "https://xecoflow.onrender.com/api/v1/payments/c2b-confirmation",
-            ValidationURL: "https://xecoflow.onrender.com/api/v1/payments/c2b-confirmation" 
-        };
-
-        const res = await axios.post(REGISTER_URL, data, {
+        const response = await axios.post(url, {
+            "ShortCode": process.env.MPESA_STORE_NUMBER, 
+            "ResponseType": "Completed", // Or "Cancelled"
+            "ConfirmationURL": "https://xecoflow.onrender.com/api/v1/payments/callback",
+            "ValidationURL": "https://xecoflow.onrender.com/api/v1/payments/validation"
+        }, {
             headers: { 
-                Authorization: `Bearer ${token}`,
+                "Authorization": `Bearer ${token}`,
                 "Content-Type": "application/json"
             }
         });
 
-        console.log("\n✅ SUCCESS:", res.data);
-    } catch (err) {
-        console.error("\n❌ FAILED:", JSON.stringify(err.response?.data || err.message, null, 2));
+        console.log("✅ [SAFARICOM]: Registration Success:", response.data);
+    } catch (error) {
+        // Log the full error to see exactly what Safaricom doesn't like
+        console.error("❌ [REGISTRATION_ERROR]:", error.response?.data || error.message);
     }
-}
+};
 
-registerV2();
+registerURL();

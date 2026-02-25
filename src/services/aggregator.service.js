@@ -8,61 +8,83 @@ class AggregatorService {
         this.baseUrl = process.env.AGGREGATOR_BASE_URL;
     }
 
+    /**
+     * 💰 FETCH BALANCE & LOG TO LEDGER
+     * This now automatically logs a record to the ledger if the balance is fetched.
+     */
     async fetchProviderBalance() {
         try {
-            console.log("🔍 [STATUM]: Fetching float balance...");
-            
-            const response = await axios.get(`${this.baseUrl}/account/balance`, {
+            const cleanBaseUrl = this.baseUrl.replace(/\/+$/, '');
+            const url = `${cleanBaseUrl}/account-details`;
+
+            const authString = Buffer.from(
+                `${this.apiKey.trim()}:${this.secretKey.trim()}`
+            ).toString('base64');
+
+            console.log(`🔍 [STATUM V2]: Fetching from ${url}`);
+
+            const response = await axios.get(url, {
                 headers: { 
-                    'api-key': this.apiKey,
-                    'api-secret': this.secretKey,
+                    'Authorization': `Basic ${authString}`,
                     'Content-Type': 'application/json'
-                },
-                timeout: 10000 // 10 second timeout
+                }
             });
 
-            // Log raw response to Render logs so you can see the exact structure
-            console.log("📥 [STATUM_RAW]:", JSON.stringify(response.data));
+            const balance = response.data?.organization?.details?.available_balance ?? 0;
+            const parsedBalance = parseFloat(balance);
 
-            /**
-             * STATUM FIX: Checking multiple possible paths for the balance value.
-             * It usually resides in response.data.data.balance or response.data.balance
-             */
-            const currentBalance = response.data?.data?.balance 
-                ?? response.data?.balance 
-                ?? response.data?.credit 
-                ?? 0;
+            console.log(`✅ [STATUM]: Balance retrieved: KES ${parsedBalance}`);
+
+            // 📝 LOG THIS SYNC TO LEDGER (Optional, but keeps history accurate)
+            // We use 0 amount because it's just a check/sync.
+            await this.logFloatChange(0, 'CREDIT', parsedBalance, "Manual Balance Sync/Pull");
 
             return { 
                 success: true, 
-                balance: parseFloat(currentBalance) 
+                balance: parsedBalance 
             };
+
         } catch (error) {
-            const errorDetail = error.response?.data || error.message;
-            console.error("❌ [STATUM_API_ERROR]:", errorDetail);
-            return { success: false, error: errorDetail };
+            const errorData = error.response?.data || error.message;
+            console.error("❌ [STATUM_V2_ERROR]:", errorData);
+            
+            return { 
+                success: false, 
+                error: errorData?.description || "Failed to fetch Statum balance" 
+            };
         }
     }
 
-    async logFloatChange(amount, type, balanceAfter, description) {
+    /**
+     * 📝 LEDGER LOGGER
+     * Matches the public.provider_float_ledger schema.
+     */
+    async logFloatChange(amount, type, balanceAfter, description, disbursementId = null) {
         try {
-            // According to your screenshot, the table needs balance_before and balance_after
-            // We calculate balance_before based on current balance and the change
-            const balanceBefore = type === 'PULL' ? balanceAfter : (balanceAfter + amount);
+            // According to your schema, type must be 'DEBIT' or 'CREDIT'
+            // If it's a DEBIT (spending), balance_before was higher.
+            // If it's a CREDIT (top-up or sync), balance_before was lower or same.
+            let balanceBefore;
+            if (type === 'DEBIT') {
+                balanceBefore = balanceAfter + amount;
+            } else {
+                balanceBefore = balanceAfter - amount;
+            }
 
             const { error } = await db.from('provider_float_ledger').insert([{
                 provider_name: 'STATUM',
-                transaction_type: type, // 'PULL', 'DEBIT', 'CREDIT'
+                transaction_type: type, // 'DEBIT' or 'CREDIT'
                 amount: amount,
                 balance_before: balanceBefore,
                 balance_after: balanceAfter,
+                disbursement_id: disbursementId,
                 description: description,
                 created_at: new Date().toISOString()
             }]);
 
             if (error) throw error;
             
-            console.log(`✅ [LEDGER_UPDATE]: ${type} logged. New Balance: ${balanceAfter}`);
+            console.log(`📊 [LEDGER]: ${type} recorded. New Balance: ${balanceAfter}`);
             return true;
         } catch (error) {
             console.error("❌ [LEDGER_ERROR]:", error.message);
