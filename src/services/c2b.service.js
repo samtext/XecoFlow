@@ -47,13 +47,20 @@ class C2bService {
         console.log(`\n💰 [C2B_RECEIPT]: ${c2bData.TransID} | Amount: ${c2bData.TransAmount} | From: ${c2bData.MSISDN}`);
 
         try {
-            // 1. Log the raw callback for audit purposes (This is working)
+            // 1. ✅ UPDATED: Map C2B fields to satisfy logging table columns (Previously NULL)
             await db.mpesa_callback_logs().insert([{
+                trans_id: c2bData.TransID,
+                checkout_request_id: c2bData.TransID, // Using TransID as the reference for C2B
+                merchant_request_id: c2bData.BusinessShortCode,
+                result_code: 0,
+                result_desc: 'C2B Confirmation Success',
+                status: 'COMPLETED',
                 callback_data: c2bData,
                 metadata: { 
                     type: 'C2B_CONFIRMATION', 
                     msisdn: c2bData.MSISDN,
-                    till_paid: c2bData.BusinessShortCode
+                    till_paid: c2bData.BusinessShortCode,
+                    bill_ref: c2bData.BillRefNumber
                 },
                 received_at: new Date().toISOString()
             }]);
@@ -69,7 +76,7 @@ class C2bService {
             const { data: userData } = await db.from('profiles')
                 .select('id')
                 .eq('phone_number', c2bData.MSISDN)
-                .maybeSingle(); // Used maybeSingle to avoid errors if not found
+                .maybeSingle(); 
 
             // 2. Prepare transaction data
             const transactionData = {
