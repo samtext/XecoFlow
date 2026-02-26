@@ -4,8 +4,7 @@ import cors from 'cors';
 import mpesaRoutes from './routes/mpesa.routes.js';
 import apiRoutes from './routes/apiRoutes.js'; 
 import authRoutes from './routes/authRoutes.js';
-// 🚩 Import the Lane 3 Worker
-import { startBackgroundWorkers } from './worker.js'; 
+
 
 const app = express();
 
