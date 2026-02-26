@@ -4,8 +4,8 @@ import cors from 'cors';
 import mpesaRoutes from './routes/mpesa.routes.js';
 import apiRoutes from './routes/apiRoutes.js'; 
 import authRoutes from './routes/authRoutes.js';
-// Import workers (Ensure path is correct to avoid ERR_MODULE_NOT_FOUND)
-import { startBackgroundWorkers } from './services/worker.service.js'; 
+
+// 🗑️ WORKER IMPORT REMOVED TO PREVENT ERR_MODULE_NOT_FOUND
 
 const app = express();
 
@@ -15,19 +15,17 @@ const app = express();
 app.set('trust proxy', 1); 
 
 /**
- * 📦 BODY PARSING (Must be BEFORE Loggers)
+ * 📦 BODY PARSING
  */
 app.use(express.json({ limit: '50kb' })); 
 app.use(express.urlencoded({ extended: true }));
 
 /**
  * 🚨 GLOBAL DEBUGGER: Catch-All Logger
- * This logs every single hit to your server.
  */
 app.use((req, res, next) => {
     console.log(`\n📡 [INCOMING_REQUEST]: ${req.method} ${req.originalUrl}`);
     
-    // Log the parsed body now that express.json() has run
     if (req.method === 'POST') {
         console.log(`📦 Body Context: ${JSON.stringify(req.body || {}, null, 2)}`);
     }
@@ -36,7 +34,6 @@ app.use((req, res, next) => {
 
 /**
  * 🔐 CORS CONFIGURATION
- * Updated to allow your specific Render UI to stop the "Failed to Fetch" error.
  */
 const allowedOrigins = [
     'https://xecoflow.onrender.com',      // Backend
@@ -73,7 +70,7 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 /**
- * 🕵️ CALLBACK LOGS (Existing logic preserved)
+ * 🕵️ CALLBACK LOGS
  */
 app.use((req, res, next) => {
     const url = req.originalUrl;
@@ -109,14 +106,5 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 SERVER LIVE: Port ${PORT}`);
-    
-    // Initialize background tasks safely
-    try {
-        if (typeof startBackgroundWorkers === 'function') {
-            startBackgroundWorkers();
-            console.log("✅ [WORKERS_ACTIVE]");
-        }
-    } catch (workerError) {
-        console.error("⚠️ [WORKER_INIT_FAILED]:", workerError.message);
-    }
+    // 🗑️ WORKER INITIALIZATION REMOVED
 });
