@@ -62,39 +62,54 @@ export const handleMpesaCallback = async (req, res) => {
 
 /**
  * 🛡️ LANE 2: C2B VALIDATION
- * Updated: Passes data to c2bService for any pre-approval logic.
+ * Updated: Parses amount to ensure it meets minimum requirements before DB check.
  */
 export const handleC2BValidation = async (req, res) => {
     try {
-        console.log(`🔍 [C2B_VALIDATION]: ID ${req.body.TransID} | Amount: ${req.body.TransAmount}`);
+        const amount = parseFloat(req.body.TransAmount);
+        console.log(`🔍 [C2B_VALIDATION]: ID ${req.body.TransID} | Amount: ${amount}`);
         
-        // Pass to service if you have logic to check user accounts/min-amounts
-        await c2bService.handleValidation(req.body);
+        // 🚩 DEBUG: Check if amount is below your DB constraint (likely 5.00)
+        if (amount < 1.0) {
+             console.warn(`⚠️ [LOW_AMOUNT]: Rejecting ${amount} KES as it is too low.`);
+             return res.status(200).json({ "ResultCode": "C2B00016", "ResultDesc": "Rejected: Below Minimum Amount" });
+        }
 
-        // Safaricom expects a specific JSON format for validation
+        await c2bService.handleValidation(req.body);
         return res.status(200).json({ "ResultCode": 0, "ResultDesc": "Accepted" });
+        
     } catch (error) {
         console.error("❌ [C2B_VALID_ERROR]:", error.message);
-        // Default to Accepted even on error to prevent blocking payments unless necessary
         return res.status(200).json({ "ResultCode": 0, "ResultDesc": "Accepted" });
     }
 };
 
 /**
  * 💰 LANE 3: C2B CONFIRMATION
- * Updated: Linked to c2bService.handleConfirmation to save C2B receipts to DB.
+ * Updated: Added error-safe acknowledgment to prevent Safaricom retries during DB Constraint errors.
  */
 export const handleC2BConfirmation = async (req, res) => {
     // Immediate ACK (Required: M-Pesa will timeout in 10s otherwise)
     res.status(200).json({ "ResultCode": 0, "ResultDesc": "Success" });
 
     try {
-        console.log(`💰 [C2B_CONFIRMATION]: TransID: ${req.body.TransID} | Amount: ${req.body.TransAmount}`);
+        const amount = parseFloat(req.body.TransAmount);
+        console.log(`💰 [C2B_CONFIRMATION]: TransID: ${req.body.TransID} | Amount: ${amount}`);
         
-        // Logic for recording the transaction and logging to audit trail
-        await c2bService.handleConfirmation(req.body);
+        // 🚩 DATA CLEANING: Ensure service receives a sanitized object
+        const sanitizedData = {
+            ...req.body,
+            TransAmount: amount, // Overwrite string with float
+            BillRefNumber: req.body.BillRefNumber || "N/A"
+        };
+
+        await c2bService.handleConfirmation(sanitizedData);
         
     } catch (error) {
+        // 🚩 LOGGING THE SPECIFIC DB ERROR (e.g., Amount Constraint)
         console.error("❌ [C2B_CONF_ERROR]:", error.message);
+        if (error.message.includes('constraint')) {
+            console.error("👉 TIP: Run the SQL command to drop your 'amount_check' constraint in the DB.");
+        }
     }
 };
