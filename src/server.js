@@ -4,8 +4,6 @@ import cors from 'cors';
 import mpesaRoutes from './routes/mpesa.routes.js';
 import apiRoutes from './routes/apiRoutes.js'; 
 import authRoutes from './routes/authRoutes.js';
-// 🚩 Import the new Gateway Routes
-import gatewayRoutes from './routes/gateway.routes.js'; 
 // 🚩 Import the Lane 3 Worker
 import { startBackgroundWorkers } from './worker.js'; 
 
@@ -21,6 +19,8 @@ app.use((req, res, next) => {
     
     // Log the raw body for POST requests to see what Safaricom is sending
     if (req.method === 'POST') {
+        // Note: Body might be empty here if express.json() hasn't run yet, 
+        // but we'll see the URL and Headers regardless.
         console.log(`📦 Body Context: ${JSON.stringify(req.body || {}, null, 2)}`);
     }
     next();
@@ -79,7 +79,7 @@ app.use(express.urlencoded({ extended: true }));
  */
 app.use((req, res, next) => {
     const url = req.originalUrl;
-    if (url.includes('callback') || url.includes('payments') || url.includes('recon')) {
+    if (url.includes('callback') || url.includes('payments')) {
         console.log(`🔔 [CALLBACK_DEBUG]: ${req.method} ${url}`);
     }
     next();
@@ -91,9 +91,6 @@ app.get('/', (req, res) => res.status(200).send('🚀 ENGINE: ONLINE'));
 /**
  * 🛣️ ROUTES
  */
-// 🚩 ADDED: M-Pesa Recon Gateway (for Store 9203342 responses)
-app.use('/api/v1/gateway', gatewayRoutes); 
-
 app.use('/api/v1/gateway', mpesaRoutes); 
 app.use('/api/v1/payments', mpesaRoutes); 
 app.use('/api/v1/auth', authRoutes);    
