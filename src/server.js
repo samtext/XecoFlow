@@ -5,7 +5,7 @@ import mpesaRoutes from './routes/mpesa.routes.js';
 import apiRoutes from './routes/apiRoutes.js'; 
 import authRoutes from './routes/authRoutes.js';
 
-// 🗑️ WORKER IMPORT REMOVED TO PREVENT ERR_MODULE_NOT_FOUND
+// ✅ ALL WORKER IMPORTS PERMANENTLY REMOVED TO FIX ERR_MODULE_NOT_FOUND
 
 const app = express();
 
@@ -80,7 +80,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// Health Check
+// Health Check - Crucial for Render's zero-downtime deploys
 app.get('/', (req, res) => res.status(200).send('🚀 ENGINE: ONLINE'));
 
 /**
@@ -106,5 +106,5 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 SERVER LIVE: Port ${PORT}`);
-    // 🗑️ WORKER INITIALIZATION REMOVED
+    // ✅ BACKGROUND WORKER INITIALIZATION PERMANENTLY REMOVED
 });
