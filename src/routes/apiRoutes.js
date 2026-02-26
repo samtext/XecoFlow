@@ -6,28 +6,35 @@ import aggregatorService from '../services/aggregator.service.js';
 const router = express.Router();
 
 // ==========================================
-// 1. DASHBOARD METRICS
+// 1. DASHBOARD METRICS (Alias added for /stats)
 // ==========================================
-router.get('/dashboard/metrics', async (req, res) => {
+const fetchMetrics = async (req, res) => {
     try {
-        console.log("📊 [DASHBOARD]: Fetching metrics...");
+        console.log("📊 [DASHBOARD]: Fetching live metrics...");
         
-        // 1. Fetch the KES 17.2 from Statum
+        // 1. Fetch live balance from Statum/M-Pesa
+        // Note: Returns 0 if Security Credential is locked (Code 8006)
         const statum = await aggregatorService.fetchProviderBalance();
         const liveBalance = statum.success ? statum.balance : 0;
 
-        // 2. Fetch Total Successful Sales Amount
-        const { data: salesData } = await db
+        // 2. Fetch Total Successful Sales
+        // Updated to 'PAYMENT_SUCCESS' to match your internal transaction logic
+        const { data: salesData, error: salesError } = await db
             .from('airtime_transactions')
             .select('amount')
-            .eq('status', 'SUCCESS');
+            .eq('status', 'PAYMENT_SUCCESS');
 
-        const totalSalesSum = salesData?.reduce((acc, curr) => acc + (curr.amount || 0), 0) || 0;
+        if (salesError) console.error("⚠️ [DB_SALES_ERROR]:", salesError.message);
+
+        const totalSalesSum = salesData?.reduce((acc, curr) => acc + (parseFloat(curr.amount) || 0), 0) || 0;
 
         // 3. Fetch Total Transaction Count
-        const { count: totalTransactions } = await db
+        const { count: totalTransactions, error: countError } = await db
             .from('airtime_transactions')
-            .select('*', { count: 'exact', head: true });
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'PAYMENT_SUCCESS');
+
+        if (countError) console.error("⚠️ [DB_COUNT_ERROR]:", countError.message);
 
         const metrics = [
             { 
@@ -50,7 +57,7 @@ router.get('/dashboard/metrics', async (req, res) => {
             },
             { 
                 id: 4, 
-                value: '10.0%', // You can calculate actual margin here later
+                value: '10.0%', 
                 label: 'SALES MARGIN', 
                 bgColor: '#f0e6f0' 
             }
@@ -61,7 +68,11 @@ router.get('/dashboard/metrics', async (req, res) => {
         console.error("❌ [METRICS_ERROR]:", error.message);
         res.status(500).json({ error: error.message });
     }
-});
+};
+
+// Supporting both endpoints to prevent frontend "404 Not Found" errors
+router.get('/dashboard/metrics', fetchMetrics);
+router.get('/dashboard/stats', fetchMetrics); 
 
 // ==========================================
 // 2. AGGREGATOR / STATUM ROUTES
@@ -97,5 +108,8 @@ router.get('/status/:checkoutRequestId', async (req, res) => {
         return res.status(500).json({ error: error.message });
     }
 });
+
+// Health check endpoint for Render
+router.get('/health', (req, res) => res.status(200).json({ status: 'UP' }));
 
 export default router;

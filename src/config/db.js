@@ -21,10 +21,16 @@ export const db = {
 
     /**
      * ✅ UPDATED: Guest-Ready Transaction Helper
-     * Uses supabaseAdmin to bypass RLS. This allows the system to save
-     * transactions even if the user_id is a "Guest ID" or NULL (common in C2B).
+     * Primary source for your Admin Dashboard Metrics.
+     * Uses supabaseAdmin to bypass RLS for C2B payments (like the 3.00 KES ones).
      */
-    airtime_transactions: () => supabaseAdmin.from(DB_MAPPING.TABLES.TRANSACTIONS),
+    airtime_transactions: () => supabaseAdmin.from('airtime_transactions'),
+
+    /**
+     * ✅ NEW: Dashboard Statistics Helper
+     * Explicitly for your getMetrics controller to pull total sales and counts.
+     */
+    dashboard_stats: () => supabaseAdmin.from('airtime_transactions').select('amount, status, created_at'),
 
     /**
      * ✅ FIXED: Explicit helper for callback logging
@@ -38,7 +44,6 @@ export const db = {
     /**
      * ✅ NOTE: Standard mappings for Client-Side (Public)
      * These use the standard 'supabase' client which respects RLS.
-     * Useful for fetching data that the public is allowed to see.
      */
     transactions: () => supabase.from(DB_MAPPING.TABLES.TRANSACTIONS),
     disbursements: () => supabase.from(DB_MAPPING.TABLES.DISBURSEMENTS),
