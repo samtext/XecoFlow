@@ -40,15 +40,16 @@ class ReconService {
         const url = `${mpesaConfig.baseUrl}/mpesa/accountbalance/v1/query`;
         
         const body = {
-            "Initiator": process.env.MPESA_INITIATOR_NAME, // SWANJIKU
-            "SecurityCredential": process.env.MPESA_SECURITY_CREDENTIAL, // The key we just generated
-            "CommandID": "AccountBalance", // Best for Store Numbers
-            "PartyA": process.env.MPESA_SHORTCODE, // 9203342
-            "IdentifierType": "2", // 🚩 CRITICAL: Use '2' for Store/Till Numbers
-            "Remarks": "Routine Reconciliation",
-            "QueueTimeOutURL": "https://xecoflow.onrender.com/api/v1/gateway/recon-timeout",
-            "ResultURL": "https://xecoflow.onrender.com/api/v1/gateway/recon-result"
-        };
+    "Initiator": process.env.MPESA_INITIATOR_NAME,
+    "SecurityCredential": process.env.MPESA_SECURITY_CREDENTIAL,
+    "CommandID": "AccountBalance",
+    // 🚩 SPECIFICALLY CALL THE STORE SHORTCODE HERE
+    "PartyA": process.env.MPESA_STORE_SHORTCODE, 
+    "IdentifierType": "2", // '2' is required for Store Numbers
+    "Remarks": "Routine Reconciliation",
+    "QueueTimeOutURL": "https://xecoflow.onrender.com/api/v1/gateway/recon-timeout",
+    "ResultURL": "https://xecoflow.onrender.com/api/v1/gateway/recon-result"
+};
 
         try {
             const response = await axios.post(url, body, {
