@@ -47,7 +47,7 @@ class C2bService {
         console.log(`\n💰 [C2B_RECEIPT]: ${c2bData.TransID} | Amount: ${c2bData.TransAmount} | From: ${c2bData.MSISDN}`);
 
         try {
-            // 1. Log the raw callback for audit purposes
+            // 1. Log the raw callback for audit purposes (This is working)
             await db.mpesa_callback_logs().insert([{
                 callback_data: c2bData,
                 metadata: { 
@@ -58,23 +58,30 @@ class C2bService {
                 received_at: new Date().toISOString()
             }]);
 
-            // 🚩 FIX: Convert the M-Pesa TransID into a deterministic UUID.
-            // This satisfies the Postgres UUID type requirement while remaining unique to this payment.
+            // 🚩 FIX: Convert the M-Pesa TransID into a deterministic UUID for the DB.
             const deterministicUuid = crypto.createHash('sha256')
                 .update(`C2B_${c2bData.TransID}`)
                 .digest('hex')
                 .substring(0, 32)
                 .replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
 
-            // 2. Insert into Airtime Transactions table
+            // 🔍 SEARCH: Try to find a user with this phone number to satisfy the user_id NOT NULL constraint
+            // If this fails, the insert below will fail unless the column is made nullable in SQL.
+            const { data: userData } = await db.from('profiles')
+                .select('id')
+                .eq('phone_number', c2bData.MSISDN)
+                .single();
+
+            // 2. Prepare transaction data
             const transactionData = {
+                user_id: userData?.id || null, // 🚩 If null, insert will fail if DB constraint is active
                 checkout_id: c2bData.TransID,
                 phone_number: c2bData.MSISDN,
                 amount: parseFloat(c2bData.TransAmount),
                 network: 'SAFARICOM',
                 status: 'PAYMENT_SUCCESS',
                 mpesa_receipt: c2bData.TransID,
-                idempotency_key: deterministicUuid, // 🚀 Valid UUID format
+                idempotency_key: deterministicUuid,
                 metadata: {
                     first_name: c2bData.FirstName,
                     middle_name: c2bData.MiddleName,
@@ -84,13 +91,15 @@ class C2bService {
                 updated_at: new Date().toISOString()
             };
 
+            // 3. Insert into Airtime Transactions table (Uses Admin client via db helper)
             const { error } = await db.airtime_transactions().insert([transactionData]);
             
             if (error) {
                 if (error.code === '23505' || error.message.includes('unique constraint')) {
                     console.warn(`⚠️ [C2B_DUPLICATE]: Transaction ${c2bData.TransID} already recorded.`);
                 } else {
-                    console.error("❌ [C2B_DB_ERROR]:", error.message);
+                    console.error("❌ [C2B_DB_ERROR]:", error.message, "| Details:", error.details);
+                    console.log("💡 Tip: Check if user_id is NOT NULL in your SQL schema.");
                 }
             } else {
                 console.log(`✅ [C2B_SUCCESS]: Recorded ${c2bData.TransID} in database.`);
