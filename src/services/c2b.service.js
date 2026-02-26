@@ -66,17 +66,17 @@ class C2bService {
                 .replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
 
             // 🔍 SEARCH: Try to find a user with this phone number to satisfy the user_id NOT NULL constraint
-            // If this fails, the insert below will fail unless the column is made nullable in SQL.
             const { data: userData } = await db.from('profiles')
                 .select('id')
                 .eq('phone_number', c2bData.MSISDN)
-                .single();
+                .maybeSingle(); // Used maybeSingle to avoid errors if not found
 
             // 2. Prepare transaction data
             const transactionData = {
-                user_id: userData?.id || null, // 🚩 If null, insert will fail if DB constraint is active
+                user_id: userData?.id || null, 
                 checkout_id: c2bData.TransID,
-                phone_number: c2bData.MSISDN,
+                // 🚩 SAFETY FIX: Ensure phone_number does not exceed VARCHAR(20)
+                phone_number: String(c2bData.MSISDN).substring(0, 20), 
                 amount: parseFloat(c2bData.TransAmount),
                 network: 'SAFARICOM',
                 status: 'PAYMENT_SUCCESS',
@@ -99,7 +99,7 @@ class C2bService {
                     console.warn(`⚠️ [C2B_DUPLICATE]: Transaction ${c2bData.TransID} already recorded.`);
                 } else {
                     console.error("❌ [C2B_DB_ERROR]:", error.message, "| Details:", error.details);
-                    console.log("💡 Tip: Check if user_id is NOT NULL in your SQL schema.");
+                    console.log("💡 Tip: Run the SQL command to expand your VARCHAR(20) columns.");
                 }
             } else {
                 console.log(`✅ [C2B_SUCCESS]: Recorded ${c2bData.TransID} in database.`);
