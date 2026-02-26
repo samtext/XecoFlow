@@ -2,6 +2,7 @@ import { db } from '../config/db.js';
 import axios from 'axios'; 
 import stkService from './stk.service.js'; 
 import mpesaConfig from '../config/mpesa.js'; 
+import crypto from 'crypto'; // 🚩 Added to generate valid UUIDs
 
 class C2bService {
     /**
@@ -15,7 +16,6 @@ class C2bService {
             const token = await stkService.getOAuthToken();
             
             const body = {
-                // 🚩 CRITICAL: For Buy Goods Tills, use the STORE NUMBER here
                 ShortCode: "9203342", 
                 ResponseType: "Completed",
                 ConfirmationURL: "https://xecoflow.onrender.com/api/v1/gateway/payments/c2b-confirmation",
@@ -44,7 +44,6 @@ class C2bService {
      * 💰 CONFIRMATION: Saves the transaction to Supabase
      */
     async handleConfirmation(c2bData) {
-        // Log the incoming data clearly for debugging
         console.log(`\n💰 [C2B_RECEIPT]: ${c2bData.TransID} | Amount: ${c2bData.TransAmount} | From: ${c2bData.MSISDN}`);
 
         try {
@@ -54,10 +53,18 @@ class C2bService {
                 metadata: { 
                     type: 'C2B_CONFIRMATION', 
                     msisdn: c2bData.MSISDN,
-                    till_paid: c2bData.BusinessShortCode // This should show your Till or Store number
+                    till_paid: c2bData.BusinessShortCode
                 },
                 received_at: new Date().toISOString()
             }]);
+
+            // 🚩 FIX: Convert the M-Pesa TransID into a deterministic UUID.
+            // This satisfies the Postgres UUID type requirement while remaining unique to this payment.
+            const deterministicUuid = crypto.createHash('sha256')
+                .update(`C2B_${c2bData.TransID}`)
+                .digest('hex')
+                .substring(0, 32)
+                .replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
 
             // 2. Insert into Airtime Transactions table
             const transactionData = {
@@ -67,14 +74,12 @@ class C2bService {
                 network: 'SAFARICOM',
                 status: 'PAYMENT_SUCCESS',
                 mpesa_receipt: c2bData.TransID,
-                // 🚩 FIX: Your DB expects a UUID format. Using the raw TransID 
-                // ensures it doesn't fail with the "C2B_" prefix syntax error.
-                idempotency_key: c2bData.TransID, 
+                idempotency_key: deterministicUuid, // 🚀 Valid UUID format
                 metadata: {
                     first_name: c2bData.FirstName,
                     middle_name: c2bData.MiddleName,
                     last_name: c2bData.LastName,
-                    bill_ref: c2bData.BillRefNumber // In Tills, this is often the MSISDN or 'Leave Blank'
+                    bill_ref: c2bData.BillRefNumber 
                 },
                 updated_at: new Date().toISOString()
             };
@@ -95,7 +100,6 @@ class C2bService {
 
         } catch (error) {
             console.error("❌ [C2B_HANDLER_EXCEPTION]:", error.message);
-            // We tell Safaricom "Accepted" even on error to stop them from retrying the same hit
             return { ResultCode: 0, ResultDesc: "Accepted" };
         }
     }
