@@ -8,7 +8,7 @@ import {
 import { mpesaIpWhitelist } from '../middlewares/mpesa.middleware.js';
 import c2bService from '../services/c2b.service.js';
 import stkService from '../services/stk.service.js';
-import { storeSocketMapping, emitPaymentToClient } from '../../socket/helper.js'; // 👈 NEW
+import { storeSocketMapping, emitPaymentToClient, getSocketId } from '../../socket/helper.js'; // 👈 Added getSocketId
 
 const router = express.Router();
 
@@ -34,6 +34,7 @@ const networkLogger = (req, res, next) => {
             transId: cb.CallbackMetadata?.Item?.find(i => i.Name === 'MpesaReceiptNumber')?.Value || null
         };
         console.log(`🆔 STK_ID: ${req.refinedData.checkoutRequestId} | Result: ${req.refinedData.resultCode}`);
+        console.log(`📝 Result Description: ${req.refinedData.resultDesc}`);
     }
     
     // Data Extraction for C2B Callbacks
@@ -115,38 +116,92 @@ router.get('/setup-urls', async (req, res) => {
  * These paths must match exactly what you send in registerUrls()
  */
 // STK Push - Enhanced with WebSocket support
-router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res, next) => {
-    // First, let the original controller handle the callback
-    await handleMpesaCallback(req, res, (err) => {
-        if (err) return next(err);
+router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res) => {
+    try {
+        console.log('📞 [STK_CALLBACK] Received from Safaricom');
         
-        // 👇 AFTER callback is processed, emit WebSocket update
+        // Process the callback
+        await handleMpesaCallback(req, res);
+        
+        // 👇 EMIT WEBSOCKET UPDATE - THIS IS CRITICAL
         if (req.refinedData) {
             const { checkoutRequestId, resultCode, resultDesc, transId } = req.refinedData;
             const status = resultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
             
+            console.log(`🔍 [WEBSOCKET_EMIT] Preparing to emit for ${checkoutRequestId}`);
+            console.log(`   Status: ${status}, Result: ${resultCode} - ${resultDesc}`);
+            
+            // Get socketId from mapping
+            const socketId = getSocketId(checkoutRequestId);
+            console.log(`   Socket ID from mapping: ${socketId || 'NOT FOUND'}`);
+            
             // Emit real-time update to the client
-            emitPaymentToClient(checkoutRequestId, status, {
-                resultCode,
-                resultDesc,
-                receiptNumber: transId,
-                message: resultCode === 0 ? 'Payment successful!' : 'Payment failed'
-            });
+            if (socketId) {
+                // Get io instance from app
+                const io = req.app.get('io');
+                
+                if (io) {
+                    io.to(socketId).emit('payment-update', {
+                        checkoutId: checkoutRequestId,
+                        status,
+                        data: {
+                            resultCode,
+                            message: resultDesc,
+                            receiptNumber: transId
+                        }
+                    });
+                    console.log(`✅ [WEBSOCKET_EMIT] Successfully emitted to socket ${socketId}`);
+                } else {
+                    console.error('❌ [WEBSOCKET_EMIT] io not available in app');
+                    // Fallback to helper function
+                    emitPaymentToClient(checkoutRequestId, status, {
+                        resultCode,
+                        resultDesc,
+                        receiptNumber: transId
+                    });
+                }
+            } else {
+                console.log(`⚠️ [WEBSOCKET_EMIT] No socket mapping found for ${checkoutRequestId}`);
+                // Try fallback emission
+                emitPaymentToClient(checkoutRequestId, status, {
+                    resultCode,
+                    resultDesc,
+                    receiptNumber: transId
+                });
+            }
+        } else {
+            console.log('⚠️ [WEBSOCKET_EMIT] No refinedData available');
         }
-    });
+        
+    } catch (error) {
+        console.error('❌ [STK_CALLBACK_ERROR]:', error);
+        // Always respond with success to M-Pesa
+        res.json({
+            ResultCode: 0,
+            ResultDesc: "Success"
+        });
+    }
 });
 
 // C2B (Paybill/Till)
-router.post('/payments/c2b-confirmation', ...webhookMiddleware, async (req, res, next) => {
-    await handleC2BConfirmation(req, res, (err) => {
-        if (err) return next(err);
+router.post('/payments/c2b-confirmation', ...webhookMiddleware, async (req, res) => {
+    try {
+        await handleC2BConfirmation(req, res);
         
-        // 👆 Add WebSocket support for C2B if needed
-        // C2B payments typically don't have real-time frontend updates
-        // But you could add if you have a dashboard
-    });
+        // Add WebSocket support for C2B if needed
+        // You can emit updates for admin dashboard here
+        
+    } catch (error) {
+        console.error('❌ [C2B_CONFIRMATION_ERROR]:', error);
+        res.json({
+            ResultCode: 0,
+            ResultDesc: "Success"
+        });
+    }
 });
 
-router.post('/payments/c2b-validation', ...webhookMiddleware, handleC2BValidation);
+router.post('/payments/c2b-validation', ...webhookMiddleware, (req, res) => {
+    handleC2BValidation(req, res);
+});
 
 export default router;
