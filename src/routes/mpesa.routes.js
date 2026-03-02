@@ -8,6 +8,7 @@ import {
 import { mpesaIpWhitelist } from '../middlewares/mpesa.middleware.js';
 import c2bService from '../services/c2b.service.js';
 import stkService from '../services/stk.service.js';
+import { storeSocketMapping, emitPaymentToClient } from '../socket/helper.js'; // 👈 NEW
 
 const router = express.Router();
 
@@ -59,7 +60,19 @@ router.get('/ping', (req, res) => {
 });
 
 // 💳 CATEGORY 1: ACTIVE REQUESTS (User-Facing)
-router.post('/stkpush', initiatePayment);
+router.post('/stkpush', async (req, res, next) => {
+    // 👇 Capture socketId from request body
+    const { socketId } = req.body;
+    
+    // Store socketId in request for later use
+    if (socketId) {
+        req.pendingSocketId = socketId;
+        console.log(`🔌 [SOCKET_REQ]: Client socket ID received: ${socketId}`);
+    }
+    
+    // Call the original controller
+    initiatePayment(req, res, next);
+});
 
 router.get('/status/:checkoutId', async (req, res) => {
     try {
@@ -101,11 +114,39 @@ router.get('/setup-urls', async (req, res) => {
  * 📥 CATEGORY 3: WEBHOOKS
  * These paths must match exactly what you send in registerUrls()
  */
-// STK Push
-router.post('/hooks/stk-callback', ...webhookMiddleware, handleMpesaCallback);
+// STK Push - Enhanced with WebSocket support
+router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res, next) => {
+    // First, let the original controller handle the callback
+    await handleMpesaCallback(req, res, (err) => {
+        if (err) return next(err);
+        
+        // 👇 AFTER callback is processed, emit WebSocket update
+        if (req.refinedData) {
+            const { checkoutRequestId, resultCode, resultDesc, transId } = req.refinedData;
+            const status = resultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
+            
+            // Emit real-time update to the client
+            emitPaymentToClient(checkoutRequestId, status, {
+                resultCode,
+                resultDesc,
+                receiptNumber: transId,
+                message: resultCode === 0 ? 'Payment successful!' : 'Payment failed'
+            });
+        }
+    });
+});
 
 // C2B (Paybill/Till)
-router.post('/payments/c2b-confirmation', ...webhookMiddleware, handleC2BConfirmation);
+router.post('/payments/c2b-confirmation', ...webhookMiddleware, async (req, res, next) => {
+    await handleC2BConfirmation(req, res, (err) => {
+        if (err) return next(err);
+        
+        // 👆 Add WebSocket support for C2B if needed
+        // C2B payments typically don't have real-time frontend updates
+        // But you could add if you have a dashboard
+    });
+});
+
 router.post('/payments/c2b-validation', ...webhookMiddleware, handleC2BValidation);
 
 export default router;

@@ -1,5 +1,6 @@
 import stkService from '../services/stk.service.js';
 import { AIRTIME_RULES, TIME_STANDARDS } from '../config/businessRules.js';
+import { storeSocketMapping } from '../socket/helper.js'; // 👈 NEW import
 
 /**
  * MANAGER: paymentController
@@ -7,12 +8,17 @@ import { AIRTIME_RULES, TIME_STANDARDS } from '../config/businessRules.js';
  */
 export const initiatePayment = async (req, res) => {
     try {
-        const { phoneNumber, amount, userId, packageId } = req.body;
+        const { phoneNumber, amount, userId, packageId, socketId } = req.body; // 👈 Add socketId
         
         // 1. ENHANCED LOGGING
         console.log(`\n=========================================`);
         console.log(`💳 [STK_PUSH_TRIGGER] Initiation`);
         console.log(`📱 Phone: ${phoneNumber} | 💰 Amt: ${amount} | 📦 Pkg: ${packageId || 'N/A'}`);
+        
+        // 👇 NEW: Log if socketId is present
+        if (socketId) {
+            console.log(`🔌 Socket ID: ${socketId}`);
+        }
         console.log(`=========================================\n`);
 
         // 2. Validation
@@ -46,6 +52,13 @@ export const initiatePayment = async (req, res) => {
         if (response.success === false) {
             console.error(`❌ [MPESA_REJECTED]:`, response.error);
             return res.status(400).json(response);
+        }
+
+        // 👇 NEW: Store socket mapping for real-time updates
+        if (socketId && response.data?.CheckoutRequestID) {
+            const checkoutId = response.data.CheckoutRequestID;
+            storeSocketMapping(checkoutId, socketId);
+            console.log(`🔌 [SOCKET_MAPPED]: Payment ${checkoutId} -> ${socketId}`);
         }
 
         console.log(`✅ [STK_QUEUED]: CheckoutID: ${response.data?.CheckoutRequestID || 'Pending'}`);
