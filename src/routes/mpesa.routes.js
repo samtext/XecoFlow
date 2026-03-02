@@ -8,7 +8,7 @@ import {
 import { mpesaIpWhitelist } from '../middlewares/mpesa.middleware.js';
 import c2bService from '../services/c2b.service.js';
 import stkService from '../services/stk.service.js';
-import { storeSocketMapping, emitPaymentToClient } from '../socket/helper.js'; // 👈 NEW
+import { storeSocketMapping, emitPaymentToClient } from '../../socket/helper.js'; // 👈 NEW
 
 const router = express.Router();
 

@@ -1,6 +1,6 @@
 import stkService from '../services/stk.service.js';
 import { AIRTIME_RULES, TIME_STANDARDS } from '../config/businessRules.js';
-import { storeSocketMapping } from '../socket/helper.js'; // 👈 NEW import
+import { storeSocketMapping } from '../../socket/helper.js'; // 👈 NEW import
 
 /**
  * MANAGER: paymentController
