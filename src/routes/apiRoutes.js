@@ -2,8 +2,14 @@ import express from 'express';
 import { db } from '../config/db.js';
 import { getProviderBalance, getFloatLedger } from '../controllers/aggregatorController.js';
 import aggregatorService from '../services/aggregator.service.js';
+import adminRoutes from './adminRoutes.js'; // 👈 IMPORT ADMIN ROUTES
 
 const router = express.Router();
+
+// ==========================================
+// ADMIN ROUTES (Protected)
+// ==========================================
+router.use('/admin', adminRoutes); // All admin routes prefixed with /admin
 
 // ==========================================
 // 1. DASHBOARD METRICS (Alias added for /stats)
