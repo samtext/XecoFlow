@@ -1,5 +1,16 @@
 import { supabase } from '../config/supabase.js';
-import { logAdminActivity } from '../services/auditService.js'; // Optional: for logging admin actions
+
+// Safely import audit service with fallback
+let logAdminActivity = async () => {}; // Default no-op function
+
+try {
+  const auditModule = await import('../services/auditService.js');
+  logAdminActivity = auditModule.logAdminActivity;
+  console.log('✅ Audit service loaded successfully');
+} catch (error) {
+  console.warn('⚠️ Audit service not available, proceeding without audit logging');
+  // logAdminActivity remains a no-op function
+}
 
 /**
  * ============================================
@@ -12,7 +23,7 @@ import { logAdminActivity } from '../services/auditService.js'; // Optional: for
  * - logoutAdmin
  * - verifyTwoFactor
  * 
- * (Your existing code above remains exactly the same)
+ * (Your existing auth functions remain above this line)
  */
 
 // ============================================
@@ -102,13 +113,18 @@ export const getDashboardStats = async (req, res) => {
       ? ((transactionCountResult.count || 0) / totalAttempts * 100).toFixed(1)
       : 0;
 
-    // Log admin activity
-    if (logAdminActivity && req.admin) {
-      await logAdminActivity({
-        adminId: req.admin.id,
-        action: 'VIEW_DASHBOARD',
-        ip: req.ip
-      });
+    // Log admin activity (safe call even if audit service not available)
+    if (req.admin) {
+      try {
+        await logAdminActivity({
+          adminId: req.admin.id,
+          action: 'VIEW_DASHBOARD',
+          ip: req.ip
+        });
+      } catch (auditError) {
+        // Silently fail - audit logging is optional
+        console.debug('Audit log skipped:', auditError.message);
+      }
     }
 
     return res.status(200).json({
@@ -186,13 +202,17 @@ export const getTransactions = async (req, res) => {
     }
 
     // Log admin activity
-    if (logAdminActivity && req.admin) {
-      await logAdminActivity({
-        adminId: req.admin.id,
-        action: 'VIEW_TRANSACTIONS',
-        details: { page, limit, filters: { status, startDate, endDate, search } },
-        ip: req.ip
-      });
+    if (req.admin) {
+      try {
+        await logAdminActivity({
+          adminId: req.admin.id,
+          action: 'VIEW_TRANSACTIONS',
+          details: { page, limit, filters: { status, startDate, endDate, search } },
+          ip: req.ip
+        });
+      } catch (auditError) {
+        // Silently fail
+      }
     }
 
     return res.status(200).json({
@@ -247,13 +267,17 @@ export const getTransactionById = async (req, res) => {
     }
 
     // Log admin activity
-    if (logAdminActivity && req.admin) {
-      await logAdminActivity({
-        adminId: req.admin.id,
-        action: 'VIEW_TRANSACTION_DETAILS',
-        details: { transactionId: id },
-        ip: req.ip
-      });
+    if (req.admin) {
+      try {
+        await logAdminActivity({
+          adminId: req.admin.id,
+          action: 'VIEW_TRANSACTION_DETAILS',
+          details: { transactionId: id },
+          ip: req.ip
+        });
+      } catch (auditError) {
+        // Silently fail
+      }
     }
 
     return res.status(200).json({
@@ -394,13 +418,17 @@ export const getSalesOverview = async (req, res) => {
     const totalCount = groupedData.reduce((sum, d) => sum + d.count, 0);
 
     // Log admin activity
-    if (logAdminActivity && req.admin) {
-      await logAdminActivity({
-        adminId: req.admin.id,
-        action: 'VIEW_SALES_OVERVIEW',
-        details: { period, year, month },
-        ip: req.ip
-      });
+    if (req.admin) {
+      try {
+        await logAdminActivity({
+          adminId: req.admin.id,
+          action: 'VIEW_SALES_OVERVIEW',
+          details: { period, year, month },
+          ip: req.ip
+        });
+      } catch (auditError) {
+        // Silently fail
+      }
     }
 
     return res.status(200).json({
@@ -464,13 +492,17 @@ export const exportTransactions = async (req, res) => {
     }
 
     // Log admin activity
-    if (logAdminActivity && req.admin) {
-      await logAdminActivity({
-        adminId: req.admin.id,
-        action: 'EXPORT_TRANSACTIONS',
-        details: { count: transactions?.length || 0, filters: { startDate, endDate, status } },
-        ip: req.ip
-      });
+    if (req.admin) {
+      try {
+        await logAdminActivity({
+          adminId: req.admin.id,
+          action: 'EXPORT_TRANSACTIONS',
+          details: { count: transactions?.length || 0, filters: { startDate, endDate, status } },
+          ip: req.ip
+        });
+      } catch (auditError) {
+        // Silently fail
+      }
     }
 
     return res.status(200).json({
