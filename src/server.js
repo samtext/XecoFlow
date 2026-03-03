@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import http from 'http'; // 👈 NEW: Import http to create server
-import { Server } from 'socket.io'; // 👈 NEW: Import Socket.IO
+import http from 'http';
+import { Server } from 'socket.io';
 import mpesaRoutes from './routes/mpesa.routes.js';
 import apiRoutes from './routes/apiRoutes.js';
 import authRoutes from './routes/authRoutes.js';
@@ -106,21 +106,20 @@ app.use((err, req, res, next) => {
 });
 
 // ============================================
-// 🔌 WEBSOCKET SETUP - NEW SECTION
+// 🔌 WEBSOCKET SETUP - ENHANCED FOR STABILITY
 // ============================================
 
 /**
  * Create HTTP server (required for WebSockets)
  */
-const server = http.createServer(app); // 👈 Create server from app
+const server = http.createServer(app);
 
 /**
- * Initialize Socket.IO with CORS configuration
+ * Initialize Socket.IO with enhanced configuration
  */
 const io = new Server(server, {
     cors: {
         origin: (origin, callback) => {
-            // Use the same CORS logic as Express
             if (!origin) return callback(null, true);
             
             const isAllowed = allowedOrigins.some(o => origin.startsWith(o)) ||
@@ -136,9 +135,23 @@ const io = new Server(server, {
         credentials: true,
         methods: ['GET', 'POST']
     },
-    // Additional Socket.IO options
-    pingTimeout: 60000,
-    pingInterval: 25000
+    // 🔧 ENHANCED: Increased timeouts for better stability
+    pingTimeout: 120000,        // Increased from 60000 to 120000 (2 minutes)
+    pingInterval: 30000,        // Keep at 30 seconds
+    connectTimeout: 30000,      // Connection timeout
+    maxHttpBufferSize: 1e6,     // Max message size
+    transports: ['websocket', 'polling'], // Allow both transports
+    allowEIO3: true,            // Compatibility
+    // 🔧 ENHANCED: Better error handling
+    handlePreflightRequest: (req, res) => {
+        res.writeHead(200, {
+            'Access-Control-Allow-Origin': req.headers.origin || '*',
+            'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            'Access-Control-Allow-Credentials': 'true'
+        });
+        res.end();
+    }
 });
 
 /**
@@ -147,10 +160,13 @@ const io = new Server(server, {
 app.set('io', io);
 
 /**
- * Socket.IO connection handler
+ * Socket.IO connection handler with enhanced logging
  */
 io.on('connection', (socket) => {
-    console.log(`🔌 [SOCKET_CONNECTED]: ${socket.id}`);
+    const clientIp = socket.handshake.headers['x-forwarded-for'] || 
+                     socket.handshake.address;
+    
+    console.log(`🔌 [SOCKET_CONNECTED]: ${socket.id} from ${clientIp}`);
 
     // Send socket ID to client
     socket.emit('socket-id', socket.id);
@@ -159,47 +175,83 @@ io.on('connection', (socket) => {
     socket.on('watch-payment', (checkoutId) => {
         socket.join(`payment-${checkoutId}`);
         console.log(`👀 [SOCKET_WATCHING]: ${socket.id} watching payment ${checkoutId}`);
+        
+        // Store in socket data for debugging
+        socket.data.watching = checkoutId;
     });
 
     // Client stops watching
     socket.on('unwatch-payment', (checkoutId) => {
         socket.leave(`payment-${checkoutId}`);
         console.log(`👋 [SOCKET_UNWATCH]: ${socket.id} stopped watching ${checkoutId}`);
+        socket.data.watching = null;
     });
 
-    // Handle disconnection
+    // Handle pings from client (keep-alive)
+    socket.on('ping', () => {
+        socket.emit('pong');
+        console.log(`📤 [SOCKET_PING]: ${socket.id} - pong sent`);
+    });
+
+    // Handle disconnection with reason
     socket.on('disconnect', (reason) => {
         console.log(`🔌 [SOCKET_DISCONNECTED]: ${socket.id} - Reason: ${reason}`);
+        console.log(`   Last watched payment: ${socket.data.watching || 'none'}`);
     });
 
     // Handle errors
     socket.on('error', (error) => {
         console.error(`❌ [SOCKET_ERROR]: ${socket.id} - ${error.message}`);
     });
+
+    // Handle connection transport upgrade
+    socket.on('upgrade', (transport) => {
+        console.log(`⬆️ [SOCKET_UPGRADE]: ${socket.id} upgraded to ${transport.name}`);
+    });
 });
 
 /**
- * Helper function to emit payment updates
- * This will be imported by routes
+ * Helper function to emit payment updates with better error handling
  */
 export const emitPaymentUpdate = (checkoutId, status, data = {}) => {
-    console.log(`📡 [SOCKET_EMIT]: Payment ${checkoutId} - ${status}`);
+    console.log(`📡 [SOCKET_EMIT]: Attempting to emit for payment ${checkoutId} - ${status}`);
     
-    // Emit to specific room
-    io.to(`payment-${checkoutId}`).emit('payment-update', {
-        checkoutId,
-        status,
-        data,
-        timestamp: new Date().toISOString()
-    });
+    try {
+        // Emit to specific room
+        io.to(`payment-${checkoutId}`).emit('payment-update', {
+            checkoutId,
+            status,
+            data,
+            timestamp: new Date().toISOString()
+        });
+        
+        console.log(`✅ [SOCKET_EMIT]: Successfully emitted to room payment-${checkoutId}`);
+        
+        // Also log room size for debugging
+        const room = io.sockets.adapter.rooms.get(`payment-${checkoutId}`);
+        const roomSize = room ? room.size : 0;
+        console.log(`   Room size: ${roomSize} client(s) watching`);
+        
+    } catch (error) {
+        console.error(`❌ [SOCKET_EMIT_ERROR]: Failed to emit for ${checkoutId}:`, error.message);
+    }
+};
+
+/**
+ * Helper to check socket health
+ */
+export const getSocketHealth = () => {
+    const connectedSockets = io.engine.clientsCount;
+    const rooms = io.sockets.adapter.rooms;
     
-    // Also emit to all connected clients (optional - for debugging)
-    io.emit('payment-update-global', {
-        checkoutId,
-        status,
-        data,
-        timestamp: new Date().toISOString()
-    });
+    console.log('\n📊 [SOCKET_HEALTH]:');
+    console.log(`   Connected clients: ${connectedSockets}`);
+    console.log(`   Active rooms: ${rooms.size}`);
+    
+    return {
+        connectedClients: connectedSockets,
+        activeRooms: rooms.size
+    };
 };
 
 // ============================================
@@ -208,9 +260,12 @@ export const emitPaymentUpdate = (checkoutId, status, data = {}) => {
 
 const PORT = process.env.PORT || 5000;
 
-// Use server.listen instead of app.listen
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 [SERVER_LIVE]: Port ${PORT}`);
-    console.log(`🔌 [WEBSOCKET_READY]: Socket.IO server attached`);
-    // ✅ BACKGROUND WORKER INITIALIZATION PERMANENTLY REMOVED
+    console.log(`🔌 [WEBSOCKET_READY]: Socket.IO server attached with:`);
+    console.log(`   - Ping timeout: 120000ms (2 minutes)`);
+    console.log(`   - Ping interval: 30000ms`);
+    console.log(`   - Transports: websocket, polling`);
 });
+
+export { io };
