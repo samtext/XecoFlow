@@ -337,7 +337,7 @@ export const verifyTwoFactor = async (req, res) => {
 };
 
 // ============================================
-// DASHBOARD FUNCTIONS - UPDATED with correct table name
+// DASHBOARD FUNCTIONS - UPDATED with real float data
 // ============================================
 
 /**
@@ -361,7 +361,8 @@ export const getDashboardStats = async (req, res) => {
       pendingCountResult,
       failedCountResult,
       monthlySalesResult,
-      uniqueCustomersResult
+      uniqueCustomersResult,
+      floatResult  // 👈 ADDED: Get float data
     ] = await Promise.all([
       // Total sales (all time successful transactions)
       supabase
@@ -403,7 +404,15 @@ export const getDashboardStats = async (req, res) => {
       // Unique customers count
       supabase
         .from('airtime_transactions')
-        .select('phone_number', { count: 'exact', distinct: true })
+        .select('phone_number', { count: 'exact', distinct: true }),
+      
+      // 👇 NEW: Get current float from provider_float_ledger
+      supabase
+        .from('provider_float_ledger')
+        .select('balance_after')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
     ]);
 
     // Calculate total sales sum
@@ -422,6 +431,9 @@ export const getDashboardStats = async (req, res) => {
     const successRate = totalAttempts > 0 
       ? ((transactionCountResult.count || 0) / totalAttempts * 100).toFixed(1)
       : 0;
+
+    // 👇 Get current float (default to 0 if not found)
+    const currentFloat = floatResult.data?.balance_after || 0;
 
     // Log admin activity
     if (logAdminActivity && req.admin) {
@@ -443,7 +455,7 @@ export const getDashboardStats = async (req, res) => {
         uniqueCustomers: uniqueCustomersResult.count || 0,
         avgTransactionValue: Math.round(avgTransactionValue * 100) / 100,
         successRate: parseFloat(successRate),
-        currentFloat: 350000,
+        currentFloat, // 👈 Now using real data from database
         salesMargin: 2.5,
         lastUpdated: new Date().toISOString()
       }
