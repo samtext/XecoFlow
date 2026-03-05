@@ -122,7 +122,7 @@ router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res) => {
         console.log('1. Timestamp:', new Date().toISOString());
         console.log('2. Full body:', JSON.stringify(req.body, null, 2));
         
-        // Process the callback
+        // Process the callback - NOTE: handleMpesaCallback might send a response
         await handleMpesaCallback(req, res);
         
         // 👇 EMIT WEBSOCKET UPDATE
@@ -185,11 +185,16 @@ router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res) => {
     } catch (error) {
         console.error('❌ [STK_CALLBACK_ERROR]:', error);
     } finally {
-        // Always respond with success to M-Pesa
-        res.json({
-            ResultCode: 0,
-            ResultDesc: "Success"
-        });
+        // ⚠️ IMPORTANT: Only send response if not already sent
+        // handleMpesaCallback might have already sent a response
+        if (!res.headersSent) {
+            res.json({
+                ResultCode: 0,
+                ResultDesc: "Success"
+            });
+        } else {
+            console.log('⚠️ Response already sent, skipping final response');
+        }
     }
 });
 
@@ -205,10 +210,13 @@ router.post('/payments/c2b-confirmation', ...webhookMiddleware, async (req, res)
         
     } catch (error) {
         console.error('❌ [C2B_CONFIRMATION_ERROR]:', error);
-        res.json({
-            ResultCode: 0,
-            ResultDesc: "Success"
-        });
+        // Only send response if not already sent
+        if (!res.headersSent) {
+            res.json({
+                ResultCode: 0,
+                ResultDesc: "Success"
+            });
+        }
     }
 });
 
