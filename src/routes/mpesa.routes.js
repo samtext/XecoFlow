@@ -8,7 +8,7 @@ import {
 import { mpesaIpWhitelist } from '../middlewares/mpesa.middleware.js';
 import c2bService from '../services/c2b.service.js';
 import stkService from '../services/stk.service.js';
-import { storeSocketMapping, emitPaymentToClient, getSocketId } from '../../socket/helper.js'; // 👈 Added getSocketId
+import { storeSocketMapping, emitPaymentToClient, getSocketId, getAllMappings } from '../../socket/helper.js';
 
 const router = express.Router();
 
@@ -18,12 +18,10 @@ const router = express.Router();
 const networkLogger = (req, res, next) => {
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
     
-    // Log basic request info
     console.log(`\n-----------------------------------------`);
     console.log(`📡 [INCOMING]: ${req.method} ${req.originalUrl}`);
     console.log(`🏠 FROM_IP: ${clientIp}`);
 
-    // Data Extraction for STK Push Callbacks
     if (req.body?.Body?.stkCallback) {
         const cb = req.body.Body.stkCallback;
         req.refinedData = {
@@ -37,7 +35,6 @@ const networkLogger = (req, res, next) => {
         console.log(`📝 Result Description: ${req.refinedData.resultDesc}`);
     }
     
-    // Data Extraction for C2B Callbacks
     if (req.body?.TransID) {
         console.log(`💰 C2B_TRANS: ${req.body.TransID} | Amount: ${req.body.TransAmount} | Ref: ${req.body.BillRefNumber}`);
     }
@@ -62,16 +59,23 @@ router.get('/ping', (req, res) => {
 
 // 💳 CATEGORY 1: ACTIVE REQUESTS (User-Facing)
 router.post('/stkpush', async (req, res, next) => {
-    // 👇 Capture socketId from request body
+    console.log('\n🔵 ===== ROUTE: STK PUSH =====');
+    console.log('1. Full request body:', JSON.stringify(req.body, null, 2));
+    console.log('2. Headers:', req.headers);
+    
     const { socketId } = req.body;
     
-    // Store socketId in request for later use
+    console.log('3. Extracted socketId:', socketId);
+    
     if (socketId) {
         req.pendingSocketId = socketId;
-        console.log(`🔌 [SOCKET_REQ]: Client socket ID received: ${socketId}`);
+        console.log('4. ✅ Stored socketId in req.pendingSocketId');
+    } else {
+        console.log('4. ❌ No socketId in request body');
     }
     
-    // Call the original controller
+    console.log('🔵 ===== END ROUTE DEBUG =====\n');
+    
     initiatePayment(req, res, next);
 });
 
@@ -86,12 +90,9 @@ router.get('/status/:checkoutId', async (req, res) => {
 });
 
 // 🔗 CATEGORY 2: ADMINISTRATION (Register URLs)
-// Trigger this once to link your Paybill to this server
 router.get('/setup-urls', async (req, res) => {
     try {
         console.log("🔗 [SETUP]: Triggering Safaricom v2 registration...");
-        
-        // Ensure c2bService is imported correctly as a default export
         const result = await c2bService.registerUrls(); 
         
         return res.status(200).json({ 
@@ -113,32 +114,39 @@ router.get('/setup-urls', async (req, res) => {
 
 /**
  * 📥 CATEGORY 3: WEBHOOKS
- * These paths must match exactly what you send in registerUrls()
  */
 // STK Push - Enhanced with WebSocket support
 router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res) => {
     try {
-        console.log('📞 [STK_CALLBACK] Received from Safaricom');
+        console.log('\n🟢 ===== STK CALLBACK RECEIVED =====');
+        console.log('1. Timestamp:', new Date().toISOString());
+        console.log('2. Full body:', JSON.stringify(req.body, null, 2));
         
         // Process the callback
         await handleMpesaCallback(req, res);
         
-        // 👇 EMIT WEBSOCKET UPDATE - THIS IS CRITICAL
+        // 👇 EMIT WEBSOCKET UPDATE
         if (req.refinedData) {
             const { checkoutRequestId, resultCode, resultDesc, transId } = req.refinedData;
             const status = resultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
             
-            console.log(`🔍 [WEBSOCKET_EMIT] Preparing to emit for ${checkoutRequestId}`);
-            console.log(`   Status: ${status}, Result: ${resultCode} - ${resultDesc}`);
+            console.log('\n🟡 ===== WEBSOCKET EMIT PREPARATION =====');
+            console.log('3. Checkout ID:', checkoutRequestId);
+            console.log('4. Status:', status);
+            console.log('5. Result:', resultCode, '-', resultDesc);
+            
+            // Check all current mappings
+            console.log('6. All current mappings:', getAllMappings());
             
             // Get socketId from mapping
             const socketId = getSocketId(checkoutRequestId);
-            console.log(`   Socket ID from mapping: ${socketId || 'NOT FOUND'}`);
+            console.log('7. Socket ID from mapping:', socketId || '❌ NOT FOUND');
             
             // Emit real-time update to the client
             if (socketId) {
                 // Get io instance from app
                 const io = req.app.get('io');
+                console.log('8. io instance available:', !!io);
                 
                 if (io) {
                     io.to(socketId).emit('payment-update', {
@@ -150,10 +158,9 @@ router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res) => {
                             receiptNumber: transId
                         }
                     });
-                    console.log(`✅ [WEBSOCKET_EMIT] Successfully emitted to socket ${socketId}`);
+                    console.log('9. ✅ Successfully emitted to socket', socketId);
                 } else {
-                    console.error('❌ [WEBSOCKET_EMIT] io not available in app');
-                    // Fallback to helper function
+                    console.error('9. ❌ io not available, using fallback');
                     emitPaymentToClient(checkoutRequestId, status, {
                         resultCode,
                         resultDesc,
@@ -161,20 +168,23 @@ router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res) => {
                     });
                 }
             } else {
-                console.log(`⚠️ [WEBSOCKET_EMIT] No socket mapping found for ${checkoutRequestId}`);
-                // Try fallback emission
+                console.log('9. ⚠️ No socket mapping found, trying fallback emission');
                 emitPaymentToClient(checkoutRequestId, status, {
                     resultCode,
                     resultDesc,
                     receiptNumber: transId
                 });
             }
+            console.log('🟡 ===== END WEBSOCKET PREP =====\n');
         } else {
-            console.log('⚠️ [WEBSOCKET_EMIT] No refinedData available');
+            console.log('⚠️ No refinedData available in request');
         }
+        
+        console.log('🟢 ===== CALLBACK PROCESSING COMPLETE =====\n');
         
     } catch (error) {
         console.error('❌ [STK_CALLBACK_ERROR]:', error);
+    } finally {
         // Always respond with success to M-Pesa
         res.json({
             ResultCode: 0,
@@ -186,10 +196,12 @@ router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res) => {
 // C2B (Paybill/Till)
 router.post('/payments/c2b-confirmation', ...webhookMiddleware, async (req, res) => {
     try {
+        console.log('\n🟣 ===== C2B CONFIRMATION RECEIVED =====');
+        console.log('Body:', JSON.stringify(req.body, null, 2));
+        
         await handleC2BConfirmation(req, res);
         
-        // Add WebSocket support for C2B if needed
-        // You can emit updates for admin dashboard here
+        console.log('🟣 ===== C2B CONFIRMATION COMPLETE =====\n');
         
     } catch (error) {
         console.error('❌ [C2B_CONFIRMATION_ERROR]:', error);
@@ -201,7 +213,12 @@ router.post('/payments/c2b-confirmation', ...webhookMiddleware, async (req, res)
 });
 
 router.post('/payments/c2b-validation', ...webhookMiddleware, (req, res) => {
+    console.log('\n⚪ ===== C2B VALIDATION RECEIVED =====');
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+    
     handleC2BValidation(req, res);
+    
+    console.log('⚪ ===== C2B VALIDATION COMPLETE =====\n');
 });
 
 export default router;
