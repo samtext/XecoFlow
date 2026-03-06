@@ -62,6 +62,94 @@ export const floatService = {
     };
   },
 
+  // ============================================
+  // 🆕 NEW FUNCTIONS ADDED BELOW
+  // ============================================
+
+  /**
+   * Reserve float for pending transaction
+   * @param {string} checkoutId - M-Pesa checkout ID
+   * @param {number} amount - Amount to reserve
+   * @returns {Promise<boolean>} Success status
+   */
+  reserveFloat: async (checkoutId, amount) => {
+    try {
+      console.log(`💰 [RESERVE] Attempting to reserve Ksh ${amount} for transaction ${checkoutId}`);
+      
+      // Get current float
+      const currentFloat = await floatService.getCurrentFloat();
+      const newFloat = currentFloat - amount;
+
+      // Log the reservation in ledger
+      const { error } = await db
+        .from('provider_float_ledger')
+        .insert([{
+          provider_name: 'STATUM',
+          transaction_type: 'RESERVE',
+          amount: -amount,
+          balance_before: currentFloat,
+          balance_after: newFloat,
+          disbursement_id: checkoutId,
+          description: `Float reserved for transaction ${checkoutId}`,
+          created_at: new Date().toISOString()
+        }]);
+
+      if (error) {
+        console.error('❌ [RESERVE] Failed to reserve float:', error);
+        return false;
+      }
+
+      console.log(`✅ [RESERVE] Float reserved: Ksh ${amount} for ${checkoutId}. New balance: ${newFloat}`);
+      return true;
+    } catch (error) {
+      console.error('❌ [RESERVE] Error reserving float:', error);
+      return false;
+    }
+  },
+
+  /**
+   * Release float for failed/cancelled transactions
+   * @param {string} checkoutId - M-Pesa checkout ID
+   * @param {number} amount - Amount to release
+   * @returns {Promise<boolean>} Success status
+   */
+  releaseFloat: async (checkoutId, amount) => {
+    try {
+      console.log(`💰 [RELEASE] Attempting to release Ksh ${amount} for transaction ${checkoutId}`);
+      
+      const currentFloat = await floatService.getCurrentFloat();
+      const newFloat = currentFloat + amount;
+
+      const { error } = await db
+        .from('provider_float_ledger')
+        .insert([{
+          provider_name: 'STATUM',
+          transaction_type: 'RELEASE',
+          amount: amount,
+          balance_before: currentFloat,
+          balance_after: newFloat,
+          disbursement_id: checkoutId,
+          description: `Float released for transaction ${checkoutId}`,
+          created_at: new Date().toISOString()
+        }]);
+
+      if (error) {
+        console.error('❌ [RELEASE] Failed to release float:', error);
+        return false;
+      }
+
+      console.log(`✅ [RELEASE] Float released: Ksh ${amount} for ${checkoutId}. New balance: ${newFloat}`);
+      return true;
+    } catch (error) {
+      console.error('❌ [RELEASE] Error releasing float:', error);
+      return false;
+    }
+  },
+
+  // ============================================
+  // EXISTING FUNCTIONS (unchanged)
+  // ============================================
+
   /**
    * Get float health status (for admin dashboard)
    * @returns {Promise<Object>} Float health info
