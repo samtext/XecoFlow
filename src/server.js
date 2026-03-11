@@ -16,12 +16,12 @@ const app = express();
 // ============================================
 const requiredEnvVars = [
     'SUPABASE_URL',
-    'SUPABASE_KEY',
+    'SUPABASE_ANON_KEY',
     'MPESA_CONSUMER_KEY',
     'MPESA_CONSUMER_SECRET',
     'MPESA_PASSKEY',
     'MPESA_SHORTCODE',
-    'MPESA_TILL_NUMBER'
+    'MPESA_TILL'
 ];
 
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
