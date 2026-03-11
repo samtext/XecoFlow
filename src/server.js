@@ -15,35 +15,61 @@ import authRoutes from './routes/authRoutes.js';
 const app = express();
 
 // ============================================
+// 📊 ENHANCED LOGGING - DEFINED FIRST!
+// ============================================
+const log = {
+    info: (...args) => console.log(`📌 [INFO] ${new Date().toISOString()}:`, ...args),
+    warn: (...args) => console.warn(`⚠️ [WARN] ${new Date().toISOString()}:`, ...args),
+    error: (...args) => console.error(`❌ [ERROR] ${new Date().toISOString()}:`, ...args),
+    debug: (...args) => {
+        if (process.env.DEBUG === 'true') {
+            console.debug(`🔍 [DEBUG] ${new Date().toISOString()}:`, ...args);
+        }
+    },
+    callback: (msg, data) => {
+        console.log(`💰 [MPESA] ${new Date().toISOString()}: ${msg}`);
+        if (data) {
+            const masked = { ...data };
+            if (masked.MSISDN) masked.MSISDN = maskPhone(masked.MSISDN);
+            if (masked.phone) masked.phone = maskPhone(masked.phone);
+            if (masked.TransID) console.log(`   Transaction: ${masked.TransID}`);
+            if (masked.TransAmount) console.log(`   Amount: KES ${masked.TransAmount}`);
+        }
+    },
+    security: (msg, data) => {
+        console.log(`🔒 [SECURITY] ${new Date().toISOString()}: ${msg}`);
+        if (data) console.log('   ', data);
+    }
+};
+
+// ============================================
 // 🔒 HTTPS/SSL PREPARATION FOR HOST AFRICA
 // ============================================
 
-// 🎯 YOUR SUGGESTION #1: Dynamic port configuration
-const PORT = process.env.PORT || 10000; // Default for dev
+// 🎯 Dynamic port configuration
+const PORT = process.env.PORT || 10000;
 const USE_HTTPS = process.env.USE_HTTPS === 'true';
-const USE_REVERSE_PROXY = process.env.USE_REVERSE_PROXY === 'true'; // New: Nginx/Apache in front
+const USE_REVERSE_PROXY = process.env.USE_REVERSE_PROXY === 'true';
 
-// Force HTTPS in production (works with or without reverse proxy)
+// Force HTTPS in production
 app.use((req, res, next) => {
     if (process.env.NODE_ENV === 'production') {
-        // Check if request is secure (handles both direct HTTPS and reverse proxy)
         const isSecure = req.secure || req.headers['x-forwarded-proto'] === 'https';
         
         if (!isSecure) {
-            // Redirect to HTTPS
-            const host = req.headers.host.split(':')[0]; // Remove port if present
+            const host = req.headers.host.split(':')[0];
             return res.redirect('https://' + host + req.url);
         }
     }
     next();
 });
 
-// 🎯 YOUR SUGGESTION #2: Configurable trust proxy
+// 🎯 Configurable trust proxy
 const TRUST_PROXY_LEVEL = process.env.TRUST_PROXY_LEVEL || 1;
 app.set('trust proxy', TRUST_PROXY_LEVEL);
 log.info(`🔧 Trust proxy level set to: ${TRUST_PROXY_LEVEL}`);
 
-// 🎯 YOUR SUGGESTION #3: Dynamic CSP for multiple APIs
+// 🎯 Dynamic CSP for multiple APIs
 const getCSPDirectives = () => {
     const directives = {
         defaultSrc: ["'self'"],
@@ -53,13 +79,12 @@ const getCSPDirectives = () => {
         connectSrc: [
             "'self'", 
             "https://*.supabase.co",
-            process.env.AGGREGATOR_BASE_URL, // Add aggregator dynamically
+            process.env.AGGREGATOR_BASE_URL,
             process.env.MPESA_CALLBACK_URL ? new URL(process.env.MPESA_CALLBACK_URL).origin : null,
-            "wss://*.render.com" // For WebSockets on Render
-        ].filter(Boolean) // Remove null values
+            "wss://*.render.com"
+        ].filter(Boolean)
     };
     
-    // Add any additional domains from comma-separated env var
     if (process.env.EXTRA_CSP_DOMAINS) {
         const extraDomains = process.env.EXTRA_CSP_DOMAINS.split(',');
         directives.connectSrc.push(...extraDomains);
@@ -68,7 +93,7 @@ const getCSPDirectives = () => {
     return directives;
 };
 
-// Add security headers with Helmet (now dynamic)
+// Add security headers with Helmet
 app.use(helmet({
     contentSecurityPolicy: {
         directives: getCSPDirectives(),
@@ -111,7 +136,7 @@ const requiredEnvVars = {
         'SSL_KEY_PATH',
         'SSL_CA_PATH'
     ],
-    hosting: [ // New hosting configuration
+    hosting: [
         'USE_REVERSE_PROXY',
         'TRUST_PROXY_LEVEL'
     ],
@@ -127,7 +152,6 @@ const requiredEnvVars = {
 console.log('\n🔍 CHECKING ENVIRONMENT VARIABLES:');
 console.log('=' .repeat(50));
 
-// Check critical vars first
 const missingCritical = requiredEnvVars.critical.filter(varName => !process.env[varName]);
 if (missingCritical.length > 0) {
     console.error('❌ FATAL: Missing critical environment variables:');
@@ -138,7 +162,6 @@ if (missingCritical.length > 0) {
 }
 console.log('✅ All critical variables present!');
 
-// Check other categories (warn only)
 const missingPayment = requiredEnvVars.payment.filter(varName => !process.env[varName]);
 if (missingPayment.length > 0) {
     console.warn('⚠️ Warning: Missing payment variables (add if needed):', missingPayment.join(', '));
@@ -149,46 +172,16 @@ if (missingAggregator.length > 0) {
     console.warn('⚠️ Warning: Missing aggregator variables (add for airtime):', missingAggregator.join(', '));
 }
 
-// Log hosting configuration
 console.log('\n🏠 HOSTING CONFIGURATION:');
 console.log(`   Reverse Proxy: ${process.env.USE_REVERSE_PROXY === 'true' ? '✅ Enabled' : '❌ Disabled'}`);
 console.log(`   Trust Proxy Level: ${process.env.TRUST_PROXY_LEVEL || '1 (default)'}`);
 console.log(`   HTTPS Mode: ${USE_HTTPS ? '✅ Direct HTTPS' : (USE_REVERSE_PROXY ? '✅ Via Reverse Proxy' : '❌ HTTP Only')}`);
 
-// Log present variables (masked)
 console.log('\n📋 Configured variables:');
 console.log(`   SUPABASE_URL: ${process.env.SUPABASE_URL ? '✅ Set' : '❌ Missing'}`);
 console.log(`   MPESA_TILL: ${process.env.MPESA_TILL ? '✅ ' + process.env.MPESA_TILL : '❌ Missing'}`);
 console.log(`   MPESA_ENVIRONMENT: ${process.env.MPESA_ENVIRONMENT || 'sandbox (default)'}`);
 console.log('=' .repeat(50) + '\n');
-
-// ============================================
-// 📊 ENHANCED LOGGING
-// ============================================
-const log = {
-    info: (...args) => console.log(`📌 [INFO] ${new Date().toISOString()}:`, ...args),
-    warn: (...args) => console.warn(`⚠️ [WARN] ${new Date().toISOString()}:`, ...args),
-    error: (...args) => console.error(`❌ [ERROR] ${new Date().toISOString()}:`, ...args),
-    debug: (...args) => {
-        if (process.env.DEBUG === 'true') {
-            console.debug(`🔍 [DEBUG] ${new Date().toISOString()}:`, ...args);
-        }
-    },
-    callback: (msg, data) => {
-        console.log(`💰 [MPESA] ${new Date().toISOString()}: ${msg}`);
-        if (data) {
-            const masked = { ...data };
-            if (masked.MSISDN) masked.MSISDN = maskPhone(masked.MSISDN);
-            if (masked.phone) masked.phone = maskPhone(masked.phone);
-            if (masked.TransID) console.log(`   Transaction: ${masked.TransID}`);
-            if (masked.TransAmount) console.log(`   Amount: KES ${masked.TransAmount}`);
-        }
-    },
-    security: (msg, data) => {
-        console.log(`🔒 [SECURITY] ${new Date().toISOString()}: ${msg}`);
-        if (data) console.log('   ', data);
-    }
-};
 
 // ============================================
 // 📱 PHONE NUMBER NORMALIZATION
@@ -316,7 +309,6 @@ const SAFARICOM_IPS = [
 
 const ipWhitelist = (req, res, next) => {
     if (process.env.NODE_ENV === 'production' && req.url.includes('c2b')) {
-        // Get real IP considering trust proxy setting
         const clientIP = req.ip || req.connection.remoteAddress;
         const cleanIP = clientIP.replace('::ffff:', '');
         
@@ -344,7 +336,6 @@ const allowedOrigins = [
     'http://localhost:5174'
 ];
 
-// Add production domain
 if (process.env.DOMAIN) {
     allowedOrigins.push(`https://${process.env.DOMAIN}`);
     allowedOrigins.push(`http://${process.env.DOMAIN}`);
@@ -637,7 +628,6 @@ export const emitPaymentUpdate = (checkoutId, status, data = {}) => {
 // ============================================
 
 if (USE_REVERSE_PROXY) {
-    // Case 1: Running behind Nginx/Apache (RECOMMENDED for Host Africa)
     server.listen(PORT, '0.0.0.0', () => {
         console.log('\n' + '='.repeat(50));
         console.log(`🚀 SERVER STARTED (Behind Reverse Proxy)`);
@@ -654,7 +644,6 @@ if (USE_REVERSE_PROXY) {
     });
     
 } else if (USE_HTTPS) {
-    // Case 2: Direct HTTPS (Bare metal on port 443 - requires sudo)
     try {
         const sslOptions = {
             key: fs.readFileSync(process.env.SSL_KEY_PATH),
@@ -684,7 +673,6 @@ if (USE_REVERSE_PROXY) {
     }
     
 } else {
-    // Case 3: HTTP (Development only)
     server.listen(PORT, '0.0.0.0', () => {
         console.log('\n' + '='.repeat(50));
         console.log(`🚀 HTTP SERVER STARTED (Development Mode)`);
