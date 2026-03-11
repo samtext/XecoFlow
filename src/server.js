@@ -12,26 +12,73 @@ import authRoutes from './routes/authRoutes.js';
 const app = express();
 
 // ============================================
-// ✅ ENVIRONMENT VALIDATION
+// ✅ COMPREHENSIVE ENVIRONMENT VALIDATION
 // ============================================
-const requiredEnvVars = [
-    'SUPABASE_URL',
-    'SUPABASE_ANON_KEY',
-    'MPESA_CONSUMER_KEY',
-    'MPESA_CONSUMER_SECRET',
-    'MPESA_PASSKEY',
-    'MPESA_SHORTCODE',
-    'MPESA_TILL'
-];
+const requiredEnvVars = {
+    critical: [
+        'SUPABASE_URL',
+        'SUPABASE_ANON_KEY',
+        'MPESA_CONSUMER_KEY',
+        'MPESA_CONSUMER_SECRET',
+        'MPESA_PASSKEY',
+        'MPESA_SHORTCODE',
+        'MPESA_TILL'
+    ],
+    payment: [
+        'MPESA_BUSINESS_SHORTCODE',
+        'MPESA_CALLBACK_URL',
+        'MPESA_ENVIRONMENT'
+    ],
+    aggregator: [
+        'AGGREGATOR_API_KEY',
+        'AGGREGATOR_BASE_URL',
+        'AGGREGATOR_SECRET_KEY'
+    ],
+    optional: [
+        'SUPABASE_SERVICE_ROLE_KEY',
+        'MPESA_INITIATOR_NAME',
+        'MPESA_SECURITY_CREDENTIAL',
+        'MPESA_STORE_SHORTCODE'
+    ]
+};
 
-const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
-if (missingEnvVars.length > 0) {
-    console.error('❌ FATAL: Missing required environment variables:', missingEnvVars.join(', '));
+console.log('\n🔍 CHECKING ENVIRONMENT VARIABLES:');
+console.log('=' .repeat(50));
+
+// Check critical vars first
+const missingCritical = requiredEnvVars.critical.filter(varName => !process.env[varName]);
+if (missingCritical.length > 0) {
+    console.error('❌ FATAL: Missing critical environment variables:');
+    missingCritical.forEach(varName => {
+        console.error(`   - ${varName}`);
+    });
+    console.error('\n📝 Add these in Render Dashboard → Environment tab');
+    console.error('Then click "Manual Deploy" → "Clear build cache & deploy"');
     process.exit(1);
 }
+console.log('✅ All critical variables present!');
+
+// Check other categories (warn only)
+const missingPayment = requiredEnvVars.payment.filter(varName => !process.env[varName]);
+if (missingPayment.length > 0) {
+    console.warn('⚠️ Warning: Missing payment variables (add if needed):', missingPayment.join(', '));
+}
+
+const missingAggregator = requiredEnvVars.aggregator.filter(varName => !process.env[varName]);
+if (missingAggregator.length > 0) {
+    console.warn('⚠️ Warning: Missing aggregator variables (add for airtime):', missingAggregator.join(', '));
+}
+
+// Log present variables (masked)
+console.log('\n📋 Configured variables:');
+console.log(`   SUPABASE_URL: ${process.env.SUPABASE_URL ? '✅ Set' : '❌ Missing'}`);
+console.log(`   SUPABASE_ANON_KEY: ${process.env.SUPABASE_ANON_KEY ? '✅ Set' : '❌ Missing'}`);
+console.log(`   MPESA_TILL: ${process.env.MPESA_TILL ? '✅ ' + process.env.MPESA_TILL : '❌ Missing'}`);
+console.log(`   MPESA_ENVIRONMENT: ${process.env.MPESA_ENVIRONMENT || 'sandbox (default)'}`);
+console.log('=' .repeat(50) + '\n');
 
 // ============================================
-// 📊 SIMPLE LOGGING
+// 📊 ENHANCED LOGGING
 // ============================================
 const log = {
     info: (...args) => console.log(`📌 [INFO] ${new Date().toISOString()}:`, ...args),
@@ -49,8 +96,14 @@ const log = {
             const masked = { ...data };
             if (masked.MSISDN) masked.MSISDN = maskPhone(masked.MSISDN);
             if (masked.phone) masked.phone = maskPhone(masked.phone);
-            console.log('   Data:', JSON.stringify(masked, null, 2));
+            if (masked.TransID) console.log(`   Transaction: ${masked.TransID}`);
+            if (masked.TransAmount) console.log(`   Amount: KES ${masked.TransAmount}`);
+            console.log('   Full Data:', JSON.stringify(masked, null, 2));
         }
+    },
+    mpesa: (msg, data) => {
+        console.log(`💳 [MPESA] ${new Date().toISOString()}: ${msg}`);
+        if (data) console.log('   ', data);
     }
 };
 
@@ -94,7 +147,7 @@ const maskPhone = (phone) => {
     if (!phone) return phone;
     const normalized = phone.toString().replace(/\D/g, '');
     if (normalized.length < 10) return '***';
-    return normalized.slice(0, 6) + '***' + normalized.slice(-3);
+    return normalized.slice(0, 4) + '***' + normalized.slice(-3);
 };
 
 // ============================================
@@ -107,7 +160,6 @@ const supabaseClient = createClient(
         auth: { persistSession: false },
         db: { schema: 'public' },
         global: {
-            // Add retry logic
             fetch: async (url, options = {}) => {
                 const MAX_RETRIES = 3;
                 const RETRY_DELAY = 1000;
@@ -130,7 +182,6 @@ const supabaseClient = createClient(
 // Export with connection check
 export const supabase = {
     ...supabaseClient,
-    // Helper to ensure connection is alive
     checkConnection: async () => {
         try {
             const { error } = await supabaseClient
@@ -161,20 +212,25 @@ app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 // ============================================
 const authLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
-    max: 10, // 10 attempts per hour
+    max: 10,
     message: { error: 'Too many auth attempts' }
 });
 
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 50, // 50 requests per 15 mins
+    max: 50,
     message: { error: 'Rate limit exceeded' }
 });
 
 const callbackLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
-    max: 20, // 20 callbacks per minute
-    message: { ResultCode: '1', ResultDesc: 'Rate limit exceeded' }
+    max: 30, // Increased for production
+    message: { ResultCode: '1', ResultDesc: 'Rate limit exceeded' },
+    skip: (req) => {
+        // Skip rate limiting for Safaricom IPs
+        const safaricomIPs = ['196.201.212.69', '196.201.212.70', '196.201.214.200'];
+        return safaricomIPs.includes(req.ip);
+    }
 });
 
 // ============================================
@@ -184,7 +240,8 @@ const allowedOrigins = [
     'https://xecoflow.onrender.com',
     'https://xecoflow-ui.onrender.com',
     'http://localhost:3000',
-    'http://localhost:5173'
+    'http://localhost:5173',
+    'http://localhost:5174'
 ];
 
 app.use(cors({
@@ -206,6 +263,17 @@ app.use(cors({
 app.use((req, res, next) => {
     const start = Date.now();
     
+    // Special logging for M-PESA endpoints
+    if (req.url.includes('c2b') || req.url.includes('callback')) {
+        console.log('\n' + '='.repeat(50));
+        console.log(`📡 [MPESA WEBHOOK] ${req.method} ${req.url}`);
+        console.log(`🏠 FROM_IP: ${req.ip}`);
+        if (req.body && Object.keys(req.body).length > 0) {
+            console.log('📦 BODY:', JSON.stringify(req.body, null, 2));
+        }
+        console.log('='.repeat(50) + '\n');
+    }
+    
     setImmediate(() => {
         log.info(`${req.method} ${req.url} - IP: ${req.ip}`);
     });
@@ -224,34 +292,32 @@ app.use((req, res, next) => {
 // 🔍 IDEMPOTENCY MIDDLEWARE
 // ============================================
 const idempotencyMiddleware = async (req, res, next) => {
-    if (!req.url.includes('c2b-callback')) return next();
+    if (!req.url.includes('c2b')) return next();
     
-    const { TransactionID, TransAmount, MSISDN } = req.body;
+    const { TransactionID, TransID, TransAmount, MSISDN } = req.body;
+    const transId = TransactionID || TransID;
     
-    if (!TransactionID) {
+    if (!transId) {
         log.error('Callback missing TransactionID');
-        return res.status(400).json({ 
+        return res.status(200).json({ 
             ResultCode: '1', 
-            ResultDesc: 'Invalid request' 
+            ResultDesc: 'Invalid request - missing transaction ID' 
         });
     }
     
     try {
-        // Normalize phone number
         const normalizedPhone = normalizePhone(MSISDN);
         
-        // Single query with proper error handling
         const { data: existing, error } = await supabase
             .from('mpesa_transactions')
             .select('id, status')
-            .eq('transaction_id', TransactionID)
+            .eq('transaction_id', transId)
             .maybeSingle();
         
         if (error) {
             log.error('Database error in idempotency check:', error);
-            // Fail open - process rather than block
             req.mpesaTransaction = { 
-                TransactionID, 
+                TransactionID: transId, 
                 TransAmount, 
                 MSISDN: normalizedPhone || MSISDN 
             };
@@ -259,8 +325,8 @@ const idempotencyMiddleware = async (req, res, next) => {
         }
         
         if (existing) {
-            log.callback('Duplicate callback prevented', { 
-                TransactionID, 
+            log.callback('🔄 Duplicate callback prevented', { 
+                TransactionID: transId, 
                 status: existing.status 
             });
             
@@ -270,9 +336,8 @@ const idempotencyMiddleware = async (req, res, next) => {
             });
         }
         
-        // Attach normalized data
         req.mpesaTransaction = { 
-            TransactionID, 
+            TransactionID: transId, 
             TransAmount, 
             MSISDN: normalizedPhone || MSISDN 
         };
@@ -280,8 +345,7 @@ const idempotencyMiddleware = async (req, res, next) => {
         
     } catch (error) {
         log.error('Idempotency check failed:', error.message);
-        // Fail open - process rather than block
-        req.mpesaTransaction = { TransactionID, TransAmount, MSISDN };
+        req.mpesaTransaction = { TransactionID: transId, TransAmount, MSISDN };
         next();
     }
 };
@@ -291,7 +355,24 @@ const idempotencyMiddleware = async (req, res, next) => {
 // ============================================
 app.use('/api/v1/auth', authLimiter);
 app.use('/api/v1', apiLimiter);
+app.use('/api/v1/gateway/c2b', callbackLimiter, idempotencyMiddleware);
 app.use('/api/v1/gateway/c2b-callback', callbackLimiter, idempotencyMiddleware);
+app.use('/api/v1/payments/c2b-confirmation', callbackLimiter, idempotencyMiddleware);
+
+// ============================================
+// ✅ SIMPLE TEST ENDPOINT
+// ============================================
+app.post('/simple-callback', (req, res) => {
+    console.log('\n✅✅✅ SIMPLE CALLBACK WORKING!');
+    console.log('Time:', new Date().toISOString());
+    console.log('Body:', req.body);
+    console.log('✅✅✅\n');
+    
+    res.status(200).json({
+        message: 'Test received',
+        yourBody: req.body
+    });
+});
 
 // ============================================
 // ✅ HEALTH CHECKS
@@ -300,18 +381,23 @@ app.get('/', (req, res) => {
     res.json({
         status: 'online',
         service: 'XecoFlow API',
-        timestamp: new Date().toISOString()
+        environment: process.env.NODE_ENV || 'development',
+        mpesaTill: process.env.MPESA_TILL || 'Not Set',
+        timestamp: new Date().toISOString(),
+        endpoints: {
+            health: '/health',
+            test: '/simple-callback',
+            c2b: '/api/v1/gateway/c2b-callback'
+        }
     });
 });
 
 app.get('/health', async (req, res) => {
-    // Check Supabase connection with retry
     let dbStatus = 'disconnected';
     let dbError = null;
     
     for (let i = 0; i < 2; i++) {
         try {
-            // Use a simple query that doesn't require a special table
             const { error } = await supabase
                 .from('mpesa_transactions')
                 .select('count')
@@ -333,6 +419,9 @@ app.get('/health', async (req, res) => {
         status: dbStatus === 'connected' ? 'healthy' : 'degraded',
         database: dbStatus,
         uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        mpesaTill: process.env.MPESA_TILL || 'Not Set',
+        environment: process.env.NODE_ENV || 'development',
         timestamp: new Date().toISOString()
     };
     
@@ -356,7 +445,11 @@ app.use('/api/v1', apiRoutes);
 // ============================================
 app.use((req, res) => {
     log.warn('404 Not Found:', req.url);
-    res.status(404).json({ error: 'Endpoint not found' });
+    res.status(404).json({ 
+        error: 'Endpoint not found',
+        path: req.url,
+        method: req.method
+    });
 });
 
 // ============================================
@@ -367,7 +460,8 @@ app.use((err, req, res, next) => {
     res.status(500).json({ 
         error: process.env.NODE_ENV === 'production' 
             ? 'Internal server error' 
-            : err.message 
+            : err.message,
+        path: req.url
     });
 });
 
@@ -383,17 +477,16 @@ const io = new Server(server, {
 
 app.set('io', io);
 
-// For debugging only - not used for critical logic
 const watchers = new Map();
 
 io.on('connection', (socket) => {
     const clientIp = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
-    log.info('Socket connected:', socket.id, 'from', clientIp);
+    log.info('🔌 Socket connected:', socket.id, 'from', clientIp);
     
     socket.on('watch-payment', (checkoutId) => {
         socket.join(`payment-${checkoutId}`);
         watchers.set(socket.id, checkoutId);
-        log.debug('Watching payment:', checkoutId);
+        log.debug('👀 Watching payment:', checkoutId);
     });
     
     socket.on('unwatch-payment', () => {
@@ -406,11 +499,10 @@ io.on('connection', (socket) => {
     
     socket.on('disconnect', (reason) => {
         watchers.delete(socket.id);
-        log.debug('Socket disconnected:', socket.id, reason);
+        log.debug('🔌 Socket disconnected:', socket.id, reason);
     });
 });
 
-// Helper to emit payment updates - uses io.to() NOT watchers
 export const emitPaymentUpdate = (checkoutId, status, data = {}) => {
     io.to(`payment-${checkoutId}`).emit('payment-update', {
         checkoutId,
@@ -420,7 +512,7 @@ export const emitPaymentUpdate = (checkoutId, status, data = {}) => {
     });
     
     const room = io.sockets.adapter.rooms.get(`payment-${checkoutId}`);
-    log.debug('Payment update sent:', { 
+    log.debug('📡 Payment update sent:', { 
         checkoutId, 
         status, 
         watchers: room ? room.size : 0 
@@ -430,40 +522,52 @@ export const emitPaymentUpdate = (checkoutId, status, data = {}) => {
 // ============================================
 // 🚀 START SERVER
 // ============================================
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
 
 server.listen(PORT, '0.0.0.0', () => {
-    log.info(`🚀 Server running on port ${PORT}`);
-    log.info(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-    log.info(`💰 M-PESA Till: ${process.env.MPESA_TILL_NUMBER}`);
+    console.log('\n' + '='.repeat(50));
+    console.log(`🚀 SERVER STARTED SUCCESSFULLY`);
+    console.log('='.repeat(50));
+    log.info(`📡 Port: ${PORT}`);
+    log.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    log.info(`💰 M-PESA Till: ${process.env.MPESA_TILL || 'NOT SET'}`);
+    log.info(`🔌 WebSocket: Ready`);
+    log.info(`📊 Health: /health`);
+    log.info(`💰 Callback: /api/v1/gateway/c2b-callback`);
+    console.log('='.repeat(50) + '\n');
 });
 
 // ============================================
 // 🛑 GRACEFUL SHUTDOWN
 // ============================================
-const shutdown = () => {
-    log.info('Received shutdown signal');
+const shutdown = (signal) => {
+    log.info(`Received ${signal}, starting graceful shutdown...`);
     
     server.close(() => {
         log.info('HTTP server closed');
         io.close(() => {
             log.info('WebSocket server closed');
+            log.info('Graceful shutdown complete');
             process.exit(0);
         });
     });
     
     setTimeout(() => {
-        log.error('Forceful shutdown');
+        log.error('Forceful shutdown after timeout');
         process.exit(1);
     }, 10000);
 };
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 process.on('uncaughtException', (error) => {
     log.error('Uncaught Exception:', error);
-    shutdown();
+    shutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    log.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 export { io };
