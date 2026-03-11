@@ -12,7 +12,7 @@ export const floatService = {
    */
   getCurrentFloat: async () => {
     try {
-      console.log('💰 Reading current float from provider_float_ledger...');
+      console.log('💰 Reading current float from provider_float_ledger please wait...');
       
       const { data, error } = await db
         .from('provider_float_ledger')
