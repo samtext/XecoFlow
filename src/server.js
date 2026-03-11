@@ -2,14 +2,86 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import http from 'http';
+import https from 'https';
+import fs from 'fs';
 import { Server } from 'socket.io';
 import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 import { createClient } from '@supabase/supabase-js';
 import mpesaRoutes from './routes/mpesa.routes.js';
 import apiRoutes from './routes/apiRoutes.js';
 import authRoutes from './routes/authRoutes.js';
 
 const app = express();
+
+// ============================================
+// 🔒 HTTPS/SSL PREPARATION FOR HOST AFRICA
+// ============================================
+
+// 🎯 YOUR SUGGESTION #1: Dynamic port configuration
+const PORT = process.env.PORT || 10000; // Default for dev
+const USE_HTTPS = process.env.USE_HTTPS === 'true';
+const USE_REVERSE_PROXY = process.env.USE_REVERSE_PROXY === 'true'; // New: Nginx/Apache in front
+
+// Force HTTPS in production (works with or without reverse proxy)
+app.use((req, res, next) => {
+    if (process.env.NODE_ENV === 'production') {
+        // Check if request is secure (handles both direct HTTPS and reverse proxy)
+        const isSecure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+        
+        if (!isSecure) {
+            // Redirect to HTTPS
+            const host = req.headers.host.split(':')[0]; // Remove port if present
+            return res.redirect('https://' + host + req.url);
+        }
+    }
+    next();
+});
+
+// 🎯 YOUR SUGGESTION #2: Configurable trust proxy
+const TRUST_PROXY_LEVEL = process.env.TRUST_PROXY_LEVEL || 1;
+app.set('trust proxy', TRUST_PROXY_LEVEL);
+log.info(`🔧 Trust proxy level set to: ${TRUST_PROXY_LEVEL}`);
+
+// 🎯 YOUR SUGGESTION #3: Dynamic CSP for multiple APIs
+const getCSPDirectives = () => {
+    const directives = {
+        defaultSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'"],
+        imgSrc: ["'self'", "data:", "https:"],
+        connectSrc: [
+            "'self'", 
+            "https://*.supabase.co",
+            process.env.AGGREGATOR_BASE_URL, // Add aggregator dynamically
+            process.env.MPESA_CALLBACK_URL ? new URL(process.env.MPESA_CALLBACK_URL).origin : null,
+            "wss://*.render.com" // For WebSockets on Render
+        ].filter(Boolean) // Remove null values
+    };
+    
+    // Add any additional domains from comma-separated env var
+    if (process.env.EXTRA_CSP_DOMAINS) {
+        const extraDomains = process.env.EXTRA_CSP_DOMAINS.split(',');
+        directives.connectSrc.push(...extraDomains);
+    }
+    
+    return directives;
+};
+
+// Add security headers with Helmet (now dynamic)
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: getCSPDirectives(),
+    },
+    hsts: {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true
+    }
+}));
+
+// Hide Express fingerprint
+app.disable('x-powered-by');
 
 // ============================================
 // ✅ COMPREHENSIVE ENVIRONMENT VALIDATION
@@ -34,11 +106,21 @@ const requiredEnvVars = {
         'AGGREGATOR_BASE_URL',
         'AGGREGATOR_SECRET_KEY'
     ],
+    ssl: [
+        'SSL_CERT_PATH',
+        'SSL_KEY_PATH',
+        'SSL_CA_PATH'
+    ],
+    hosting: [ // New hosting configuration
+        'USE_REVERSE_PROXY',
+        'TRUST_PROXY_LEVEL'
+    ],
     optional: [
         'SUPABASE_SERVICE_ROLE_KEY',
         'MPESA_INITIATOR_NAME',
         'MPESA_SECURITY_CREDENTIAL',
-        'MPESA_STORE_SHORTCODE'
+        'MPESA_STORE_SHORTCODE',
+        'EXTRA_CSP_DOMAINS'
     ]
 };
 
@@ -52,8 +134,6 @@ if (missingCritical.length > 0) {
     missingCritical.forEach(varName => {
         console.error(`   - ${varName}`);
     });
-    console.error('\n📝 Add these in Render Dashboard → Environment tab');
-    console.error('Then click "Manual Deploy" → "Clear build cache & deploy"');
     process.exit(1);
 }
 console.log('✅ All critical variables present!');
@@ -69,10 +149,15 @@ if (missingAggregator.length > 0) {
     console.warn('⚠️ Warning: Missing aggregator variables (add for airtime):', missingAggregator.join(', '));
 }
 
+// Log hosting configuration
+console.log('\n🏠 HOSTING CONFIGURATION:');
+console.log(`   Reverse Proxy: ${process.env.USE_REVERSE_PROXY === 'true' ? '✅ Enabled' : '❌ Disabled'}`);
+console.log(`   Trust Proxy Level: ${process.env.TRUST_PROXY_LEVEL || '1 (default)'}`);
+console.log(`   HTTPS Mode: ${USE_HTTPS ? '✅ Direct HTTPS' : (USE_REVERSE_PROXY ? '✅ Via Reverse Proxy' : '❌ HTTP Only')}`);
+
 // Log present variables (masked)
 console.log('\n📋 Configured variables:');
 console.log(`   SUPABASE_URL: ${process.env.SUPABASE_URL ? '✅ Set' : '❌ Missing'}`);
-console.log(`   SUPABASE_ANON_KEY: ${process.env.SUPABASE_ANON_KEY ? '✅ Set' : '❌ Missing'}`);
 console.log(`   MPESA_TILL: ${process.env.MPESA_TILL ? '✅ ' + process.env.MPESA_TILL : '❌ Missing'}`);
 console.log(`   MPESA_ENVIRONMENT: ${process.env.MPESA_ENVIRONMENT || 'sandbox (default)'}`);
 console.log('=' .repeat(50) + '\n');
@@ -92,17 +177,15 @@ const log = {
     callback: (msg, data) => {
         console.log(`💰 [MPESA] ${new Date().toISOString()}: ${msg}`);
         if (data) {
-            // Mask sensitive data in logs
             const masked = { ...data };
             if (masked.MSISDN) masked.MSISDN = maskPhone(masked.MSISDN);
             if (masked.phone) masked.phone = maskPhone(masked.phone);
             if (masked.TransID) console.log(`   Transaction: ${masked.TransID}`);
             if (masked.TransAmount) console.log(`   Amount: KES ${masked.TransAmount}`);
-            console.log('   Full Data:', JSON.stringify(masked, null, 2));
         }
     },
-    mpesa: (msg, data) => {
-        console.log(`💳 [MPESA] ${new Date().toISOString()}: ${msg}`);
+    security: (msg, data) => {
+        console.log(`🔒 [SECURITY] ${new Date().toISOString()}: ${msg}`);
         if (data) console.log('   ', data);
     }
 };
@@ -113,25 +196,18 @@ const log = {
 export const normalizePhone = (phone) => {
     if (!phone) return null;
     
-    // Remove all non-digits
     let cleaned = phone.toString().replace(/\D/g, '');
     
-    // Handle different formats
     if (cleaned.startsWith('0')) {
-        // 0712345678 -> 254712345678
         cleaned = '254' + cleaned.substring(1);
     } else if (cleaned.startsWith('7')) {
-        // 712345678 -> 254712345678
         cleaned = '254' + cleaned;
     } else if (cleaned.startsWith('2547')) {
-        // Already in correct format
         return cleaned;
     } else if (cleaned.startsWith('+254')) {
-        // +254712345678 -> 254712345678
         cleaned = cleaned.substring(1);
     }
     
-    // Validate length (Kenyan numbers are 12 digits with 254)
     if (cleaned.length === 12 && cleaned.startsWith('254')) {
         return cleaned;
     }
@@ -151,7 +227,7 @@ const maskPhone = (phone) => {
 };
 
 // ============================================
-// 🛡️ SUPABASE CLIENT WITH CONNECTION RESILIENCE
+// 🛡️ SUPABASE CLIENT
 // ============================================
 const supabaseClient = createClient(
     process.env.SUPABASE_URL,
@@ -179,7 +255,6 @@ const supabaseClient = createClient(
     }
 );
 
-// Export with connection check
 export const supabase = {
     ...supabaseClient,
     checkConnection: async () => {
@@ -197,11 +272,6 @@ export const supabase = {
 };
 
 // ============================================
-// 🛡️ PROXY TRUST
-// ============================================
-app.set('trust proxy', 1);
-
-// ============================================
 // 📦 BODY PARSING
 // ============================================
 app.use(express.json({ limit: '10kb' }));
@@ -211,27 +281,57 @@ app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 // 🚦 RATE LIMITING
 // ============================================
 const authLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000, // 1 hour
+    windowMs: 60 * 60 * 1000,
     max: 10,
     message: { error: 'Too many auth attempts' }
 });
 
 const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
+    windowMs: 15 * 60 * 1000,
     max: 50,
     message: { error: 'Rate limit exceeded' }
 });
 
 const callbackLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minute
-    max: 30, // Increased for production
+    windowMs: 60 * 1000,
+    max: 30,
     message: { ResultCode: '1', ResultDesc: 'Rate limit exceeded' },
     skip: (req) => {
-        // Skip rate limiting for Safaricom IPs
         const safaricomIPs = ['196.201.212.69', '196.201.212.70', '196.201.214.200'];
         return safaricomIPs.includes(req.ip);
     }
 });
+
+// ============================================
+// 🔐 IP WHITELISTING FOR CALLBACKS
+// ============================================
+const SAFARICOM_IPS = [
+    '196.201.212.69',
+    '196.201.212.70',
+    '196.201.214.200',
+    '196.201.214.206',
+    '196.201.213.114',
+    '196.201.213.44'
+];
+
+const ipWhitelist = (req, res, next) => {
+    if (process.env.NODE_ENV === 'production' && req.url.includes('c2b')) {
+        // Get real IP considering trust proxy setting
+        const clientIP = req.ip || req.connection.remoteAddress;
+        const cleanIP = clientIP.replace('::ffff:', '');
+        
+        if (!SAFARICOM_IPS.includes(cleanIP)) {
+            log.security('Blocked non-Safaricom IP', { ip: cleanIP, url: req.url });
+            return res.status(403).json({
+                ResultCode: '1',
+                ResultDesc: 'Access denied - invalid source IP'
+            });
+        }
+        
+        log.security('Validated Safaricom IP', { ip: cleanIP });
+    }
+    next();
+};
 
 // ============================================
 // 🔐 CORS
@@ -243,6 +343,12 @@ const allowedOrigins = [
     'http://localhost:5173',
     'http://localhost:5174'
 ];
+
+// Add production domain
+if (process.env.DOMAIN) {
+    allowedOrigins.push(`https://${process.env.DOMAIN}`);
+    allowedOrigins.push(`http://${process.env.DOMAIN}`);
+}
 
 app.use(cors({
     origin: (origin, callback) => {
@@ -263,11 +369,12 @@ app.use(cors({
 app.use((req, res, next) => {
     const start = Date.now();
     
-    // Special logging for M-PESA endpoints
     if (req.url.includes('c2b') || req.url.includes('callback')) {
         console.log('\n' + '='.repeat(50));
         console.log(`📡 [MPESA WEBHOOK] ${req.method} ${req.url}`);
-        console.log(`🏠 FROM_IP: ${req.ip}`);
+        console.log(`🏠 FROM_IP: ${req.ip} (original: ${req.connection.remoteAddress})`);
+        console.log(`🔒 PROTOCOL: ${req.secure ? 'HTTPS' : 'HTTP'}`);
+        console.log(`🔄 X-Forwarded-Proto: ${req.headers['x-forwarded-proto'] || 'none'}`);
         if (req.body && Object.keys(req.body).length > 0) {
             console.log('📦 BODY:', JSON.stringify(req.body, null, 2));
         }
@@ -355,9 +462,9 @@ const idempotencyMiddleware = async (req, res, next) => {
 // ============================================
 app.use('/api/v1/auth', authLimiter);
 app.use('/api/v1', apiLimiter);
-app.use('/api/v1/gateway/c2b', callbackLimiter, idempotencyMiddleware);
-app.use('/api/v1/gateway/c2b-callback', callbackLimiter, idempotencyMiddleware);
-app.use('/api/v1/payments/c2b-confirmation', callbackLimiter, idempotencyMiddleware);
+app.use('/api/v1/gateway/c2b', ipWhitelist, callbackLimiter, idempotencyMiddleware);
+app.use('/api/v1/gateway/c2b-callback', ipWhitelist, callbackLimiter, idempotencyMiddleware);
+app.use('/api/v1/payments/c2b-confirmation', ipWhitelist, callbackLimiter, idempotencyMiddleware);
 
 // ============================================
 // ✅ SIMPLE TEST ENDPOINT
@@ -382,6 +489,9 @@ app.get('/', (req, res) => {
         status: 'online',
         service: 'XecoFlow API',
         environment: process.env.NODE_ENV || 'development',
+        protocol: req.secure ? 'HTTPS' : 'HTTP',
+        reverseProxy: USE_REVERSE_PROXY ? 'enabled' : 'disabled',
+        trustProxyLevel: app.get('trust proxy'),
         mpesaTill: process.env.MPESA_TILL || 'Not Set',
         timestamp: new Date().toISOString(),
         endpoints: {
@@ -418,6 +528,9 @@ app.get('/health', async (req, res) => {
     const health = {
         status: dbStatus === 'connected' ? 'healthy' : 'degraded',
         database: dbStatus,
+        protocol: req.secure ? 'HTTPS' : 'HTTP',
+        reverseProxy: USE_REVERSE_PROXY ? 'enabled' : 'disabled',
+        trustProxyLevel: app.get('trust proxy'),
         uptime: process.uptime(),
         memory: process.memoryUsage(),
         mpesaTill: process.env.MPESA_TILL || 'Not Set',
@@ -520,22 +633,71 @@ export const emitPaymentUpdate = (checkoutId, status, data = {}) => {
 };
 
 // ============================================
-// 🚀 START SERVER
+// 🚀 START SERVER (WITH HOST AFRICA OPTIONS)
 // ============================================
-const PORT = process.env.PORT || 10000;
 
-server.listen(PORT, '0.0.0.0', () => {
-    console.log('\n' + '='.repeat(50));
-    console.log(`🚀 SERVER STARTED SUCCESSFULLY`);
-    console.log('='.repeat(50));
-    log.info(`📡 Port: ${PORT}`);
-    log.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-    log.info(`💰 M-PESA Till: ${process.env.MPESA_TILL || 'NOT SET'}`);
-    log.info(`🔌 WebSocket: Ready`);
-    log.info(`📊 Health: /health`);
-    log.info(`💰 Callback: /api/v1/gateway/c2b-callback`);
-    console.log('='.repeat(50) + '\n');
-});
+if (USE_REVERSE_PROXY) {
+    // Case 1: Running behind Nginx/Apache (RECOMMENDED for Host Africa)
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log('\n' + '='.repeat(50));
+        console.log(`🚀 SERVER STARTED (Behind Reverse Proxy)`);
+        console.log('='.repeat(50));
+        log.info(`🔄 Mode: Reverse Proxy (Nginx/Apache)`);
+        log.info(`📡 Internal Port: ${PORT}`);
+        log.info(`🔒 SSL handled by: Proxy server`);
+        log.info(`🏠 Trust Proxy Level: ${app.get('trust proxy')}`);
+        log.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+        log.info(`💰 M-PESA Till: ${process.env.MPESA_TILL || 'NOT SET'}`);
+        log.info(`🔌 WebSocket: Ready`);
+        log.info(`📊 Health: /health`);
+        console.log('='.repeat(50) + '\n');
+    });
+    
+} else if (USE_HTTPS) {
+    // Case 2: Direct HTTPS (Bare metal on port 443 - requires sudo)
+    try {
+        const sslOptions = {
+            key: fs.readFileSync(process.env.SSL_KEY_PATH),
+            cert: fs.readFileSync(process.env.SSL_CERT_PATH),
+        };
+        
+        if (process.env.SSL_CA_PATH) {
+            sslOptions.ca = fs.readFileSync(process.env.SSL_CA_PATH);
+        }
+        
+        https.createServer(sslOptions, app).listen(PORT, '0.0.0.0', () => {
+            console.log('\n' + '='.repeat(50));
+            console.log(`🚀 HTTPS SERVER STARTED (Direct SSL)`);
+            console.log('='.repeat(50));
+            log.info(`🔒 Mode: Direct HTTPS`);
+            log.info(`📡 Port: ${PORT}${PORT === 443 ? ' (Standard HTTPS)' : ''}`);
+            log.info(`⚠️  Note: Port 443 requires sudo on Linux`);
+            log.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+            log.info(`💰 M-PESA Till: ${process.env.MPESA_TILL || 'NOT SET'}`);
+            log.info(`🔌 WebSocket: Ready`);
+            log.info(`📊 Health: /health`);
+            console.log('='.repeat(50) + '\n');
+        });
+    } catch (error) {
+        log.error('Failed to start HTTPS server:', error);
+        process.exit(1);
+    }
+    
+} else {
+    // Case 3: HTTP (Development only)
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log('\n' + '='.repeat(50));
+        console.log(`🚀 HTTP SERVER STARTED (Development Mode)`);
+        console.log('='.repeat(50));
+        log.info(`⚠️ Mode: HTTP (not secure - dev only)`);
+        log.info(`📡 Port: ${PORT}`);
+        log.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+        log.info(`💰 M-PESA Till: ${process.env.MPESA_TILL || 'NOT SET'}`);
+        log.info(`🔌 WebSocket: Ready`);
+        log.info(`📊 Health: /health`);
+        console.log('='.repeat(50) + '\n');
+    });
+}
 
 // ============================================
 // 🛑 GRACEFUL SHUTDOWN
