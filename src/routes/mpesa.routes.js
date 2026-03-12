@@ -198,11 +198,53 @@ router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res) => {
     }
 });
 
-// C2B (Paybill/Till)
+// ============================================
+// 🛡️ C2B VALIDATION - THIS RUNS BEFORE MONEY MOVES!
+// ============================================
+router.post('/payments/c2b-validation', ...webhookMiddleware, async (req, res) => {
+    console.log('\n⚪ ===== C2B VALIDATION RECEIVED =====');
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+    
+    try {
+        // Extract amount for logging
+        const amount = parseFloat(req.body.TransAmount);
+        console.log(`💰 Amount: KES ${amount}`);
+        
+        // Call controller - it has the KES 10 minimum logic!
+        await handleC2BValidation(req, res);
+        
+        // Note: handleC2BValidation already sends the response
+        console.log('⚪ ===== C2B VALIDATION COMPLETE =====\n');
+        
+    } catch (error) {
+        console.error('❌ [C2B_VALIDATION_ERROR]:', error.message);
+        
+        // Only send response if not already sent
+        if (!res.headersSent) {
+            // Fail open - accept to prevent M-PESA retries
+            res.json({
+                ResultCode: 0,
+                ResultDesc: "Accepted"
+            });
+        }
+    }
+});
+
+// ============================================
+// 💰 C2B CONFIRMATION - THIS RUNS AFTER MONEY MOVES
+// ============================================
 router.post('/payments/c2b-confirmation', ...webhookMiddleware, async (req, res) => {
     try {
         console.log('\n🟣 ===== C2B CONFIRMATION RECEIVED =====');
         console.log('Body:', JSON.stringify(req.body, null, 2));
+        
+        const amount = parseFloat(req.body.TransAmount);
+        console.log(`💰 Amount: KES ${amount}`);
+        
+        // Check minimum amount BEFORE processing
+        if (amount < 10) {
+            console.log(`🚫 Amount below minimum - WILL NEED REFUND!`);
+        }
         
         await handleC2BConfirmation(req, res);
         
@@ -220,13 +262,17 @@ router.post('/payments/c2b-confirmation', ...webhookMiddleware, async (req, res)
     }
 });
 
-router.post('/payments/c2b-validation', ...webhookMiddleware, (req, res) => {
-    console.log('\n⚪ ===== C2B VALIDATION RECEIVED =====');
-    console.log('Body:', JSON.stringify(req.body, null, 2));
-    
-    handleC2BValidation(req, res);
-    
-    console.log('⚪ ===== C2B VALIDATION COMPLETE =====\n');
+// ============================================
+// 🔍 DIAGNOSTIC: Check what Safaricom sees
+// ============================================
+router.get('/debug/endpoints', (req, res) => {
+    res.json({
+        validation: 'https://xecoflow.onrender.com/api/v1/payments/c2b-validation',
+        confirmation: 'https://xecoflow.onrender.com/api/v1/payments/c2b-confirmation',
+        stk: 'https://xecoflow.onrender.com/api/v1/hooks/stk-callback',
+        status: 'active',
+        minimumAmount: 10
+    });
 });
 
 export default router;
