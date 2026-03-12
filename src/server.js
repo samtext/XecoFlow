@@ -449,10 +449,18 @@ const idempotencyMiddleware = async (req, res, next) => {
 };
 
 // ============================================
+// 🔀 FIX FOR MISMATCHED SAFARICOM URL (ADD THIS)
+// ============================================
+app.use('/api/v1/gateway/payments/c2b-confirmation', ipWhitelist, callbackLimiter, idempotencyMiddleware, (req, res, next) => {
+    console.log('🔄 Redirecting /gateway/payments/c2b-confirmation → /payments/c2b-confirmation');
+    // Rewrite the URL to match your working endpoint
+    req.url = '/api/v1/payments/c2b-confirmation';
+    next();
+});
+
+// ============================================
 // 🛣️ ROUTE MIDDLEWARE
 // ============================================
-app.use('/api/v1/auth', authLimiter);
-app.use('/api/v1', apiLimiter);
 app.use('/api/v1/gateway/c2b', ipWhitelist, callbackLimiter, idempotencyMiddleware);
 app.use('/api/v1/gateway/c2b-callback', ipWhitelist, callbackLimiter, idempotencyMiddleware);
 app.use('/api/v1/payments/c2b-confirmation', ipWhitelist, callbackLimiter, idempotencyMiddleware);
