@@ -1,11 +1,125 @@
 // backend/src/services/auditService.js
 
 /**
- * Audit Service - Logs admin activities to database
- * This prevents the "ERR_MODULE_NOT_FOUND" error in adminController.js
+ * Audit Service - Logs admin activities and system events to database
+ * This prevents the "ERR_MODULE_NOT_FOUND" error in controllers
  */
 
 import { supabase } from '../config/supabase.js';
+
+// ============================================
+// 📝 SYSTEM-WIDE AUDIT FUNCTIONS (For callbackController)
+// ============================================
+
+/**
+ * Log error events from anywhere in the system
+ * @param {string} type - Error type/category
+ * @param {Object} data - Error details and context
+ */
+export const logError = async (type, data = {}) => {
+  try {
+    const logEntry = {
+      level: 'error',
+      type,
+      timestamp: new Date().toISOString(),
+      ...data
+    };
+    
+    // Console output for Render logs
+    console.error(`📝 [AUDIT:ERROR] ${type}:`, JSON.stringify(logEntry, null, 2));
+    
+    // Store in database if needed
+    try {
+      const { error } = await supabase
+        .from('system_logs')
+        .insert([{
+          level: 'error',
+          category: type,
+          message: data.error || 'Unknown error',
+          details: data,
+          ip_address: data.ip,
+          created_at: new Date().toISOString()
+        }]);
+      
+      if (error) console.warn('⚠️ Could not save error to DB:', error.message);
+    } catch (dbError) {
+      // Silent fail - don't crash main process
+    }
+    
+    return logEntry;
+  } catch (error) {
+    console.error('❌ [AUDIT] Error in logError:', error.message);
+    return { success: false };
+  }
+};
+
+/**
+ * Log info events from anywhere in the system
+ * @param {string} type - Info type/category
+ * @param {Object} data - Info details and context
+ */
+export const logInfo = async (type, data = {}) => {
+  try {
+    const logEntry = {
+      level: 'info',
+      type,
+      timestamp: new Date().toISOString(),
+      ...data
+    };
+    
+    console.log(`📝 [AUDIT:INFO] ${type}:`, JSON.stringify(logEntry, null, 2));
+    
+    // Optionally store in database
+    if (process.env.STORE_INFO_LOGS === 'true') {
+      try {
+        await supabase
+          .from('system_logs')
+          .insert([{
+            level: 'info',
+            category: type,
+            message: data.message || type,
+            details: data,
+            ip_address: data.ip,
+            created_at: new Date().toISOString()
+          }]);
+      } catch (dbError) {
+        // Silent fail
+      }
+    }
+    
+    return logEntry;
+  } catch (error) {
+    console.error('❌ [AUDIT] Error in logInfo:', error.message);
+    return { success: false };
+  }
+};
+
+/**
+ * Log warning events
+ * @param {string} type - Warning type/category
+ * @param {Object} data - Warning details
+ */
+export const logWarn = async (type, data = {}) => {
+  try {
+    const logEntry = {
+      level: 'warn',
+      type,
+      timestamp: new Date().toISOString(),
+      ...data
+    };
+    
+    console.warn(`📝 [AUDIT:WARN] ${type}:`, JSON.stringify(logEntry, null, 2));
+    
+    return logEntry;
+  } catch (error) {
+    console.error('❌ [AUDIT] Error in logWarn:', error.message);
+    return { success: false };
+  }
+};
+
+// ============================================
+// 👤 ADMIN AUDIT FUNCTIONS (Original)
+// ============================================
 
 /**
  * Log admin activity to database
@@ -25,7 +139,7 @@ export const logAdminActivity = async ({ adminId, action, details = {}, ip }) =>
 
     console.log(`📝 [AUDIT] Logging activity: ${action} for admin ${adminId}`);
 
-    // Insert into audit_logs table (you need to create this table in Supabase)
+    // Insert into audit_logs table
     const { data, error } = await supabase
       .from('audit_logs')
       .insert([
@@ -122,8 +236,46 @@ export const getAllAuditLogs = async ({ page = 1, limit = 50, action = null } = 
   }
 };
 
+// ============================================
+// 📊 SYSTEM LOGS (For monitoring)
+// ============================================
+
+/**
+ * Get recent system errors for dashboard
+ * @param {number} limit - Number of logs to return
+ */
+export const getRecentErrors = async (limit = 20) => {
+  try {
+    const { data, error } = await supabase
+      .from('system_logs')
+      .select('*')
+      .eq('level', 'error')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+    return { success: true, data };
+  } catch (error) {
+    console.error('❌ [AUDIT] Error fetching errors:', error.message);
+    return { success: false, error: error.message };
+  }
+};
+
+// ============================================
+// 📦 EXPORT ALL FUNCTIONS
+// ============================================
+
 export default {
+  // System-wide logging (used by callbackController)
+  logError,
+  logInfo,
+  logWarn,
+  
+  // Admin-specific logging
   logAdminActivity,
   getAdminAuditLogs,
-  getAllAuditLogs
+  getAllAuditLogs,
+  
+  // System logs
+  getRecentErrors
 };

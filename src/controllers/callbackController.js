@@ -2,7 +2,7 @@ import Joi from 'joi';
 import { randomUUID } from 'crypto';
 import stkService from '../services/stk.service.js';
 import c2bService from '../services/c2b.service.js';
-import auditService from '../services/auditService.js';
+import { auditService } from '../services/auditService.js'; // Fixed import
 import { transactionRules, calculateProfit } from '../config/businessRules.js';
 
 // ============================================
@@ -106,7 +106,7 @@ const validateAmount = (amount, transactionId = 'unknown') => {
 };
 
 // ============================================
-// ✅ VALIDATION SCHEMAS
+// ✅ VALIDATION SCHEMAS (FIXED FOR EMPTY BILLREFNUMBER)
 // ============================================
 const stkSchema = Joi.object({
     Body: Joi.object({
@@ -133,7 +133,7 @@ const c2bSchema = Joi.object({
     TransTime: Joi.string().optional(),
     TransAmount: Joi.string().required(),
     BusinessShortCode: Joi.string().optional(),
-    BillRefNumber: Joi.string().optional().default('N/A'),
+    BillRefNumber: Joi.string().optional().allow('').default('N/A'), // ✅ FIXED: Allows empty string
     InvoiceNumber: Joi.string().optional(),
     OrgAccountBalance: Joi.string().optional(),
     ThirdPartyTransID: Joi.string().optional(),
@@ -302,11 +302,30 @@ export const handleC2BValidation = async (req, res) => {
         console.log(`\n🔍 [${requestId}] C2B VALIDATION RECEIVED`);
         console.log(`   IP: ${ipAddress}`);
         
-        // 1. Validate input
+        // 1. AMOUNT VALIDATION FIRST (KES 10 minimum)
+        const amountValidation = validateAmount(req.body.TransAmount, req.body.TransID);
+        
+        if (!amountValidation.valid) {
+            console.log(`🚫 [${requestId}] Amount rejected:`, amountValidation.message);
+            
+            await auditService.logInfo('c2b_validation_rejected', {
+                requestId,
+                transactionId: req.body.TransID,
+                amount: amountValidation.amount,
+                reason: amountValidation.message
+            });
+            
+            return res.status(200).json({ 
+                ResultCode: amountValidation.code,
+                ResultDesc: amountValidation.message
+            });
+        }
+        
+        // 2. Validate input schema (with fixed BillRefNumber)
         const { error, value } = c2bSchema.validate(req.body);
         
         if (error) {
-            console.warn(`⚠️ [${requestId}] Validation failed:`, error.message);
+            console.warn(`⚠️ [${requestId}] Schema validation failed:`, error.message);
             
             await auditService.logError('c2b_validation_schema_error', {
                 requestId,
@@ -319,25 +338,6 @@ export const handleC2BValidation = async (req, res) => {
             return res.status(200).json({ 
                 ResultCode: "C2B00016", 
                 ResultDesc: "Invalid request format" 
-            });
-        }
-        
-        // 2. Validate amount (KES 10 minimum)
-        const amountValidation = validateAmount(value.TransAmount, value.TransID);
-        
-        if (!amountValidation.valid) {
-            console.log(`🚫 [${requestId}] Amount rejected:`, amountValidation.message);
-            
-            await auditService.logInfo('c2b_validation_rejected', {
-                requestId,
-                transactionId: value.TransID,
-                amount: amountValidation.amount,
-                reason: amountValidation.message
-            });
-            
-            return res.status(200).json({ 
-                ResultCode: amountValidation.code,
-                ResultDesc: amountValidation.message
             });
         }
         
@@ -385,7 +385,7 @@ export const handleC2BValidation = async (req, res) => {
 };
 
 // ============================================
-// 💰 LANE 3: C2B CONFIRMATION
+// 💰 LANE 3: C2B CONFIRMATION (FIXED VERSION)
 // ============================================
 export const handleC2BConfirmation = async (req, res) => {
     const requestId = randomUUID();
@@ -403,11 +403,28 @@ export const handleC2BConfirmation = async (req, res) => {
             console.log(`   IP: ${ipAddress}`);
             console.log(`   Content-Type: ${req.headers['content-type']}`);
             
-            // 3. Validate input
+            // 3. AMOUNT VALIDATION FIRST (KES 10 minimum) - FIXED: Now runs before Joi
+            const amountValidation = validateAmount(req.body.TransAmount, req.body.TransID);
+            
+            if (!amountValidation.valid) {
+                console.log(`🚫 [${requestId}] Amount rejected:`, amountValidation.message);
+                
+                await auditService.logInfo('c2b_confirmation_rejected', {
+                    requestId,
+                    transactionId: req.body.TransID,
+                    amount: amountValidation.amount,
+                    reason: amountValidation.message,
+                    ip: ipAddress
+                });
+                
+                return; // Don't process further, but already ACKed
+            }
+            
+            // 4. Validate input schema (with fixed BillRefNumber)
             const { error, value } = c2bSchema.validate(req.body);
             
             if (error) {
-                console.error(`❌ [${requestId}] Validation failed:`, error.message);
+                console.error(`❌ [${requestId}] Schema validation failed:`, error.message);
                 
                 await auditService.logError('c2b_confirmation_schema_error', {
                     requestId,
@@ -421,23 +438,6 @@ export const handleC2BConfirmation = async (req, res) => {
                 });
                 
                 return;
-            }
-            
-            // 4. Validate amount (should pass since validation already did, but double-check)
-            const amountValidation = validateAmount(value.TransAmount, value.TransID);
-            
-            if (!amountValidation.valid) {
-                console.error(`❌ [${requestId}] Amount validation failed at confirmation stage!`, amountValidation.message);
-                
-                await auditService.logError('c2b_confirmation_amount_mismatch', {
-                    requestId,
-                    transactionId: value.TransID,
-                    amount: value.TransAmount,
-                    reason: amountValidation.message,
-                    validationPassed: false
-                });
-                
-                return; // Don't process, but already ACKed
             }
             
             const amount = amountValidation.amount;
@@ -523,6 +523,7 @@ export const handleC2BConfirmation = async (req, res) => {
         } catch (error) {
             console.error(`❌ [${requestId}] Fatal error:`, error.message);
             
+            // 🎯 FIXED: Log EVERYTHING including full body
             const errorContext = {
                 error: error.message,
                 stack: error.stack,
@@ -545,7 +546,14 @@ export const handleC2BConfirmation = async (req, res) => {
                 errorContext.bodyStatus = 'NO BODY RECEIVED';
             }
             
-            await auditService.logError('c2b_confirmation_fatal', errorContext);
+            // Try to use auditService, but don't crash if it fails
+            try {
+                await auditService.logError('c2b_confirmation_fatal', errorContext);
+            } catch (auditError) {
+                console.error('⚠️ Audit service failed:', auditError.message);
+                // Fallback to console
+                console.error('FATAL ERROR CONTEXT:', JSON.stringify(errorContext, null, 2));
+            }
             
             if (error.message.includes('constraint') || error.message.includes('duplicate key')) {
                 console.error(`👉 TIP: Database constraint issue for ${req.body?.TransID || 'unknown'}`);
