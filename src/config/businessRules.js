@@ -13,6 +13,47 @@ const AIRTIME_RULES = {
     MIN_AMOUNT: 5,
     MAX_AMOUNT: 10000
 };
+// ============================================
+// 📊 BUSINESS RULES CONFIGURATION
+// ============================================
+
+export const transactionRules = {
+    // Amount limits
+    minAmount: parseFloat(process.env.MIN_TRANSACTION_AMOUNT) || 10,
+    maxAmount: parseFloat(process.env.MAX_TRANSACTION_AMOUNT) || 70000,
+    
+    // Profit margins (for reporting)
+    marginPercentage: 5, // 5%
+    
+    // Infrastructure costs (for internal tracking)
+    costPerTransaction: 0.30, // KES 0.30
+    
+    // Business hours (optional)
+    allowWeekends: true,
+    businessHours: {
+        start: 6, // 6 AM
+        end: 23   // 11 PM
+    },
+    
+    // Validation messages
+    messages: {
+        belowMinimum: (min) => `Minimum transaction amount is KES ${min}`,
+        aboveMaximum: (max) => `Maximum transaction amount is KES ${max}`,
+        outsideBusinessHours: "Transactions only allowed between 6 AM - 11 PM"
+    }
+};
+
+// Profitability calculator (for analytics)
+export const calculateProfit = (amount) => {
+    const revenue = amount * (transactionRules.marginPercentage / 100);
+    const cost = transactionRules.costPerTransaction;
+    return {
+        grossProfit: revenue,
+        netProfit: revenue - cost,
+        isProfitable: (revenue - cost) > 0,
+        breakEvenAmount: (cost / (transactionRules.marginPercentage / 100)).toFixed(2)
+    };
+};
 
 const PAYMENT_RULES = {
     STK_WAIT_TIME_MS: 60000, 
