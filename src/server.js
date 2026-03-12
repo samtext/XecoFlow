@@ -449,12 +449,19 @@ const idempotencyMiddleware = async (req, res, next) => {
 };
 
 // ============================================
-// 🔀 FIX FOR MISMATCHED SAFARICOM URL (FIXED)
+// 🔀 PERMANENT FIX FOR MISMATCHED SAFARICOM URL
 // ============================================
-app.use('/api/v1/gateway/payments/c2b-confirmation', ipWhitelist, callbackLimiter, idempotencyMiddleware, (req, res, next) => {
-    console.log('🔄 Redirecting /gateway/payments/c2b-confirmation → /payments/c2b-confirmation');
-    // ✅ CORRECT: Replace only the matching part, not the entire URL
-    req.url = req.url.replace('/api/v1/gateway/payments/c2b-confirmation', '/api/v1/payments/c2b-confirmation');
+// This global middleware runs BEFORE any route matching
+app.use((req, res, next) => {
+    // Check if the URL matches the problematic pattern
+    if (req.url.startsWith('/api/v1/gateway/payments/c2b-confirmation')) {
+        const newUrl = req.url.replace('/api/v1/gateway/payments/c2b-confirmation', '/api/v1/payments/c2b-confirmation');
+        console.log(`🔄 Rewriting URL: ${req.url} → ${newUrl}`);
+        
+        // ✅ CRITICAL: Modify both url and originalUrl
+        req.url = newUrl;
+        req.originalUrl = newUrl;
+    }
     next();
 });
 
