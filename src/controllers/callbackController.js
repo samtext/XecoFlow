@@ -2,7 +2,7 @@ import Joi from 'joi';
 import { randomUUID } from 'crypto';
 import stkService from '../services/stk.service.js';
 import c2bService from '../services/c2b.service.js';
-import { auditService } from '../services/auditService.js'; // Fixed import
+import * as auditService from '../services/auditService.js'; // Fixed import
 import { transactionRules, calculateProfit } from '../config/businessRules.js';
 
 // ============================================
@@ -403,7 +403,7 @@ export const handleC2BConfirmation = async (req, res) => {
             console.log(`   IP: ${ipAddress}`);
             console.log(`   Content-Type: ${req.headers['content-type']}`);
             
-            // 3. AMOUNT VALIDATION FIRST (KES 10 minimum) - FIXED: Now runs before Joi
+            // 3. AMOUNT VALIDATION FIRST (KES 10 minimum)
             const amountValidation = validateAmount(req.body.TransAmount, req.body.TransID);
             
             if (!amountValidation.valid) {
@@ -523,7 +523,7 @@ export const handleC2BConfirmation = async (req, res) => {
         } catch (error) {
             console.error(`❌ [${requestId}] Fatal error:`, error.message);
             
-            // 🎯 FIXED: Log EVERYTHING including full body
+            // Log EVERYTHING including full body
             const errorContext = {
                 error: error.message,
                 stack: error.stack,
