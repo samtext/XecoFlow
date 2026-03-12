@@ -449,12 +449,12 @@ const idempotencyMiddleware = async (req, res, next) => {
 };
 
 // ============================================
-// 🔀 FIX FOR MISMATCHED SAFARICOM URL (ADD THIS)
+// 🔀 FIX FOR MISMATCHED SAFARICOM URL (FIXED)
 // ============================================
 app.use('/api/v1/gateway/payments/c2b-confirmation', ipWhitelist, callbackLimiter, idempotencyMiddleware, (req, res, next) => {
     console.log('🔄 Redirecting /gateway/payments/c2b-confirmation → /payments/c2b-confirmation');
-    // Rewrite the URL to match your working endpoint
-    req.url = '/api/v1/payments/c2b-confirmation';
+    // ✅ CORRECT: Replace only the matching part, not the entire URL
+    req.url = req.url.replace('/api/v1/gateway/payments/c2b-confirmation', '/api/v1/payments/c2b-confirmation');
     next();
 });
 
