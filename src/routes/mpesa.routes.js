@@ -199,9 +199,9 @@ router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 🛡️ C2B VALIDATION - THIS RUNS BEFORE MONEY MOVES!
+// 🛡️ C2B VALIDATION - FIXED: Removed duplicate /payments
 // ============================================
-router.post('/payments/c2b-validation', ...webhookMiddleware, async (req, res) => {
+router.post('/c2b-validation', ...webhookMiddleware, async (req, res) => {
     console.log('\n⚪ ===== C2B VALIDATION RECEIVED =====');
     console.log('Body:', JSON.stringify(req.body, null, 2));
     
@@ -213,7 +213,6 @@ router.post('/payments/c2b-validation', ...webhookMiddleware, async (req, res) =
         // Call controller - it has the KES 10 minimum logic!
         await handleC2BValidation(req, res);
         
-        // Note: handleC2BValidation already sends the response
         console.log('⚪ ===== C2B VALIDATION COMPLETE =====\n');
         
     } catch (error) {
@@ -231,9 +230,9 @@ router.post('/payments/c2b-validation', ...webhookMiddleware, async (req, res) =
 });
 
 // ============================================
-// 💰 C2B CONFIRMATION - THIS RUNS AFTER MONEY MOVES
+// 💰 C2B CONFIRMATION - FIXED: Removed duplicate /payments
 // ============================================
-router.post('/payments/c2b-confirmation', ...webhookMiddleware, async (req, res) => {
+router.post('/c2b-confirmation', ...webhookMiddleware, async (req, res) => {
     try {
         console.log('\n🟣 ===== C2B CONFIRMATION RECEIVED =====');
         console.log('Body:', JSON.stringify(req.body, null, 2));
