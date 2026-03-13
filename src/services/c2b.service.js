@@ -3,14 +3,13 @@ import axios from 'axios';
 import stkService from './stk.service.js'; 
 import mpesaConfig from '../config/mpesa.js'; 
 import crypto from 'crypto';
-import { normalizePhone } from '../utils/phoneUtils.js'; // You need to create this
+import { normalizePhone } from '../utils/phoneUtils.js';
 
 class C2bService {
     /**
      * 🚀 REGISTER URLS (v2): Mapping to the Store Number
      */
     async registerUrls() {
-        // Your existing code - this is good!
         const url = `${mpesaConfig.baseUrl}/mpesa/c2b/v2/registerurl`;
         
         try {
@@ -42,16 +41,14 @@ class C2bService {
     }
 
     /**
-     * 🔍 VALIDATION - THIS IS CRITICAL! FIX THIS FIRST!
+     * 🔍 VALIDATION
      */
     async handleValidation(data) {
         console.log(`🔍 [C2B_VALIDATION]: TransID: ${data.TransID} | Amount: ${data.TransAmount}`);
         
-        // Get minimum amount from env or default to 10
         const minAmount = parseFloat(process.env.MIN_TRANSACTION_AMOUNT) || 10;
         const amount = parseFloat(data.TransAmount);
         
-        // Check if amount is valid number
         if (isNaN(amount) || amount <= 0) {
             console.log(`🚫 [C2B_VALIDATION_REJECTED]: Invalid amount`);
             return { 
@@ -60,7 +57,6 @@ class C2bService {
             };
         }
         
-        // REJECT amounts below minimum - money NEVER leaves customer!
         if (amount < minAmount) {
             console.log(`🚫 [C2B_VALIDATION_REJECTED]: Amount ${amount} below minimum ${minAmount}`);
             return { 
@@ -69,8 +65,7 @@ class C2bService {
             };
         }
         
-        // Check maximum amount (Safaricom limit)
-        const maxAmount = 70000;
+        const maxAmount = parseFloat(process.env.MAX_TRANSACTION_AMOUNT) || 70000;
         if (amount > maxAmount) {
             console.log(`🚫 [C2B_VALIDATION_REJECTED]: Amount ${amount} exceeds maximum ${maxAmount}`);
             return { 
@@ -84,7 +79,49 @@ class C2bService {
     }
 
     /**
-     * 💰 CONFIRMATION - Only called for VALID transactions (after validation passes)
+     * ✅ CHECK TRANSACTION - For idempotency
+     * This method checks if a transaction already exists in the database
+     */
+    async checkTransaction({ id, type }) {
+        console.log(`🔍 [C2B_SERVICE] Checking transaction: ${id} (${type})`);
+        
+        try {
+            // Determine which field to search by based on type
+            let query = db.airtime_transactions().select('id, status, created_at');
+            
+            if (type === 'C2B') {
+                // For C2B, use transaction_id (TransID from M-PESA)
+                query = query.eq('transaction_id', id);
+            } else if (type === 'STK') {
+                // For STK, use checkout_id (CheckoutRequestID)
+                query = query.eq('checkout_id', id);
+            } else {
+                // Fallback - try both
+                query = query.or(`transaction_id.eq.${id},checkout_id.eq.${id}`);
+            }
+            
+            const { data, error } = await query.maybeSingle();
+            
+            if (error) {
+                console.error('❌ [C2B_SERVICE] Error checking transaction:', error.message);
+                return null;
+            }
+            
+            if (data) {
+                console.log(`✅ [C2B_SERVICE] Found existing transaction: ${data.id} (status: ${data.status})`);
+            } else {
+                console.log(`📭 [C2B_SERVICE] No existing transaction found for ${id}`);
+            }
+            
+            return data;
+        } catch (error) {
+            console.error('❌ [C2B_SERVICE] Exception checking transaction:', error.message);
+            return null;
+        }
+    }
+
+    /**
+     * 💰 CONFIRMATION
      */
     async handleConfirmation(c2bData) {
         console.log(`\n💰 [C2B_RECEIPT]: ${c2bData.TransID} | Amount: ${c2bData.TransAmount} | From: ${c2bData.MSISDN}`);
@@ -120,7 +157,8 @@ class C2bService {
             
             // 4. Prepare transaction data
             const transactionData = {
-                user_id: null, // Can't determine user from hashed phone
+                transaction_id: c2bData.TransID, // Add this field!
+                user_id: null,
                 checkout_id: c2bData.TransID,
                 phone_number: normalizedPhone || c2bData.MSISDN.substring(0, 20),
                 amount: parseFloat(c2bData.TransAmount),
@@ -128,13 +166,13 @@ class C2bService {
                 status: 'PAYMENT_SUCCESS',
                 mpesa_receipt: c2bData.TransID,
                 idempotency_key: deterministicUuid,
-                airtime_status: 'PENDING', // Track airtime delivery
+                airtime_status: 'PENDING',
                 metadata: {
                     first_name: c2bData.FirstName,
                     middle_name: c2bData.MiddleName,
                     last_name: c2bData.LastName,
                     bill_ref: c2bData.BillRefNumber,
-                    raw_msisdn: c2bData.MSISDN // Store raw for reference
+                    raw_msisdn: c2bData.MSISDN
                 },
                 updated_at: new Date().toISOString()
             };
@@ -156,7 +194,7 @@ class C2bService {
                     
                     if (error.code === '23505' || error.message.includes('unique constraint')) {
                         console.warn(`⚠️ [C2B_DUPLICATE]: Transaction ${c2bData.TransID} already recorded.`);
-                        break; // Duplicate is fine - just return success
+                        break;
                     }
                     
                     retries--;
@@ -173,7 +211,6 @@ class C2bService {
             
             if (retries === 0 && lastError) {
                 console.error("❌ [C2B_DB_ERROR]:", lastError.message);
-                // Log to error tracking but don't throw - M-PESA already got 200
             }
 
             return { ResultCode: 0, ResultDesc: "Success" };
@@ -181,6 +218,28 @@ class C2bService {
         } catch (error) {
             console.error("❌ [C2B_HANDLER_EXCEPTION]:", error.message);
             return { ResultCode: 0, ResultDesc: "Accepted" };
+        }
+    }
+
+    /**
+     * 🔍 GET TRANSACTION BY ID
+     */
+    async getTransaction(transactionId) {
+        try {
+            const { data, error } = await db.airtime_transactions()
+                .select('*')
+                .eq('transaction_id', transactionId)
+                .maybeSingle();
+            
+            if (error) {
+                console.error('❌ [C2B_SERVICE] Error fetching transaction:', error.message);
+                return null;
+            }
+            
+            return data;
+        } catch (error) {
+            console.error('❌ [C2B_SERVICE] Exception fetching transaction:', error.message);
+            return null;
         }
     }
 }
