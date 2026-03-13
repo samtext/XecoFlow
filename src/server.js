@@ -11,6 +11,7 @@ import { createClient } from '@supabase/supabase-js';
 import mpesaRoutes from './routes/mpesa.routes.js';
 import apiRoutes from './routes/apiRoutes.js';
 import authRoutes from './routes/authRoutes.js';
+import reversalRoutes from './routes/reversal.routes.js'; // ADDED: Reversal routes
 
 const app = express();
 
@@ -360,9 +361,9 @@ app.use(cors({
 app.use((req, res, next) => {
     const start = Date.now();
     
-    if (req.url.includes('c2b') || req.url.includes('callback')) {
+    if (req.url.includes('c2b') || req.url.includes('callback') || req.url.includes('reversal')) {
         console.log('\n' + '='.repeat(50));
-        console.log(`📡 [MPESA WEBHOOK] ${req.method} ${req.url}`);
+        console.log(`📡 [WEBHOOK] ${req.method} ${req.url}`);
         console.log(`🏠 FROM_IP: ${req.ip} (original: ${req.connection.remoteAddress})`);
         console.log(`🔒 PROTOCOL: ${req.secure ? 'HTTPS' : 'HTTP'}`);
         console.log(`🔄 X-Forwarded-Proto: ${req.headers['x-forwarded-proto'] || 'none'}`);
@@ -451,14 +452,10 @@ const idempotencyMiddleware = async (req, res, next) => {
 // ============================================
 // 🔀 PERMANENT FIX FOR MISMATCHED SAFARICOM URL
 // ============================================
-// This global middleware runs BEFORE any route matching
 app.use((req, res, next) => {
-    // Check if the URL matches the problematic pattern
     if (req.url.startsWith('/api/v1/gateway/payments/c2b-confirmation')) {
         const newUrl = req.url.replace('/api/v1/gateway/payments/c2b-confirmation', '/api/v1/payments/c2b-confirmation');
         console.log(`🔄 Rewriting URL: ${req.url} → ${newUrl}`);
-        
-        // ✅ CRITICAL: Modify both url and originalUrl
         req.url = newUrl;
         req.originalUrl = newUrl;
     }
@@ -503,7 +500,8 @@ app.get('/', (req, res) => {
         endpoints: {
             health: '/health',
             test: '/simple-callback',
-            c2b: '/api/v1/gateway/c2b-callback'
+            c2b: '/api/v1/gateway/c2b-callback',
+            reversal: '/api/v1/reversal/status/:transactionId'  // ADDED
         }
     });
 });
@@ -558,6 +556,7 @@ app.use('/api/v1/gateway', mpesaRoutes);
 app.use('/api/v1/payments', mpesaRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1', apiRoutes);
+app.use('/api/v1/reversal', reversalRoutes);  // ADDED: Reversal routes
 
 // ============================================
 // 🛑 404 HANDLER
