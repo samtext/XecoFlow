@@ -23,12 +23,14 @@
     "ip-range-check": "^0.2.0",
     "joi": "^18.0.2",
     "mysql2": "^3.6.1",
-    "node-cron": "^3.0.2",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^8.0.2",
     "socket.io": "^4.8.3",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
+    "@types/node-cron": "^3.0.11",
     "nodemon": "^3.1.13"
   }
 }
