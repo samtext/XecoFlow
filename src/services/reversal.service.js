@@ -47,8 +47,7 @@ class ReversalService {
 
     /**
      * Initiate reversal with retry logic (3 attempts)
-     * FIXED: Now works even if transaction isn't in database yet
-     * FIXED: Added BASE_URL fallback to prevent "undefined" URLs
+     * FIXED: Now uses the correct shortcode from the payment data
      */
     async initiateReversal(transactionId, amount, reason = 'Airtime delivery failed', requestData = null) {
         console.log(`🔄 [REVERSAL] Starting for transaction: ${transactionId}, Amount: KES ${amount}`);
@@ -63,14 +62,13 @@ class ReversalService {
                 console.log(`📡 [REVERSAL] Attempt ${attempts}/${MAX_RETRIES} for ${transactionId}`);
                 
                 // 🚨 FIX: Don't fail if transaction not in DB - just proceed with reversal
-                // The transaction might not be saved yet (below minimum case)
                 let transaction = null;
                 try {
                     const { data, error } = await db
                         .from('mpesa_transactions')
                         .select('*')
                         .eq('transaction_id', transactionId)
-                        .maybeSingle(); // Use maybeSingle() instead of single() to avoid error
+                        .maybeSingle();
                     
                     if (!error && data) {
                         transaction = data;
@@ -86,7 +84,6 @@ class ReversalService {
                     }
                 } catch (dbError) {
                     console.log(`⚠️ [REVERSAL] DB check failed (non-critical):`, dbError.message);
-                    // Continue with reversal even if DB check fails
                 }
 
                 // Get M-PESA access token
@@ -97,9 +94,20 @@ class ReversalService {
                     ? 'https://api.safaricom.co.ke/mpesa/reversal/v1/request'
                     : 'https://sandbox.safaricom.co.ke/mpesa/reversal/v1/request';
 
-                // 🔧 FIX: Add fallback for BASE_URL to prevent "undefined" URLs
+                // 🔧 FIX: Add fallback for BASE_URL
                 const baseUrl = process.env.BASE_URL || 'https://xecoflow.onrender.com';
                 console.log(`🔗 [REVERSAL] Using base URL: ${baseUrl}`);
+
+                // 🔥 CRITICAL FIX: Get the correct shortcode from the payment data
+                // Payments come to 9203342, but your org shortcode is 7450249
+                // For reversals, use the shortcode from the payment (BusinessShortCode)
+                const receiverParty = requestData?.BusinessShortCode || 
+                                      process.env.MPESA_PAYMENT_SHORTCODE || 
+                                      process.env.MPESA_STORE_SHORTCODE || 
+                                      process.env.MPESA_SHORTCODE || 
+                                      "9203342"; // Default to the payment shortcode
+                
+                console.log(`🏦 [REVERSAL] Using ReceiverParty: ${receiverParty} (from payment data)`);
 
                 // Generate unique originator conversation ID
                 const originatorConversationID = crypto.randomUUID();
@@ -110,10 +118,10 @@ class ReversalService {
                     CommandID: 'TransactionReversal',
                     TransactionID: transactionId,
                     Amount: amount,
-                    ReceiverParty: process.env.MPESA_SHORTCODE,
+                    ReceiverParty: receiverParty, // ✅ FIXED: Now uses correct shortcode
                     RecieverIdentifierType: '11',
-                    ResultURL: `${baseUrl}/api/v1/reversal/result`,  // ✅ FIXED
-                    QueueTimeOutURL: `${baseUrl}/api/v1/reversal/timeout`,  // ✅ FIXED
+                    ResultURL: `${baseUrl}/api/v1/reversal/result`,
+                    QueueTimeOutURL: `${baseUrl}/api/v1/reversal/timeout`,
                     Remarks: reason.substring(0, 100) // M-PESA limit
                 };
 
@@ -125,12 +133,12 @@ class ReversalService {
                         'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json'
                     },
-                    timeout: 30000 // 30 second timeout
+                    timeout: 30000
                 });
 
                 console.log(`📥 [REVERSAL] Response:`, response.data);
 
-                // Try to log reversal attempt (don't fail if DB error)
+                // Try to log reversal attempt
                 try {
                     await db.from('reversal_logs').insert([{
                         transaction_id: transactionId,
@@ -142,12 +150,12 @@ class ReversalService {
                         mpesa_originator_conversation_id: response.data.OriginatorConversationID,
                         raw_callback: response.data,
                         attempt: attempts,
-                        request_data: requestData
+                        request_data: requestData,
+                        receiver_party: receiverParty // Log which shortcode was used
                     }]);
                     console.log(`✅ [REVERSAL] Log saved to database`);
                 } catch (logError) {
                     console.log(`⚠️ [REVERSAL] Could not save log to DB:`, logError.message);
-                    // Continue - reversal already initiated
                 }
 
                 // Try to update transaction status if it exists
@@ -176,7 +184,7 @@ class ReversalService {
                 lastError = error;
                 console.error(`❌ [REVERSAL] Attempt ${attempts} failed:`, error.message);
                 
-                // Try to log failed attempt
+                // Log failed attempt
                 try {
                     await db.from('reversal_logs').insert([{
                         transaction_id: transactionId,
@@ -206,7 +214,6 @@ class ReversalService {
         
         // Try to mark for manual review
         try {
-            // First check if transaction exists
             const { data: transaction } = await db
                 .from('mpesa_transactions')
                 .select('id')
@@ -294,7 +301,6 @@ class ReversalService {
                 
                 // If failed, check if we should retry
                 if (resultCode === 'R000002' || resultCode === 'R000001') {
-                    // Invalid or already reversed - don't retry
                     console.log(`📌 [REVERSAL] Permanent failure, not retrying`);
                 } else {
                     console.log(`📌 [REVERSAL] Temporary failure, will be retried by queue`);
@@ -324,7 +330,6 @@ class ReversalService {
             })
             .eq('mpesa_conversation_id', callbackData.ConversationID);
 
-        // Transaction will be picked up by queue job for retry
         return { success: true };
     }
 
