@@ -2,7 +2,8 @@ import Joi from 'joi';
 import { randomUUID } from 'crypto';
 import stkService from '../services/stk.service.js';
 import c2bService from '../services/c2b.service.js';
-import * as auditService from '../services/auditService.js'; // Fixed import
+import reversalService from '../services/reversal.service.js'; // NEW: Import reversal service
+import * as auditService from '../services/auditService.js';
 import { transactionRules, calculateProfit } from '../config/businessRules.js';
 
 // ============================================
@@ -106,7 +107,7 @@ const validateAmount = (amount, transactionId = 'unknown') => {
 };
 
 // ============================================
-// ✅ VALIDATION SCHEMAS (FIXED FOR EMPTY BILLREFNUMBER)
+// ✅ VALIDATION SCHEMAS
 // ============================================
 const stkSchema = Joi.object({
     Body: Joi.object({
@@ -133,7 +134,7 @@ const c2bSchema = Joi.object({
     TransTime: Joi.string().optional(),
     TransAmount: Joi.string().required(),
     BusinessShortCode: Joi.string().optional(),
-    BillRefNumber: Joi.string().optional().allow('').default('N/A'), // ✅ FIXED: Allows empty string
+    BillRefNumber: Joi.string().optional().allow('').default('N/A'),
     InvoiceNumber: Joi.string().optional(),
     OrgAccountBalance: Joi.string().optional(),
     ThirdPartyTransID: Joi.string().optional(),
@@ -385,7 +386,7 @@ export const handleC2BValidation = async (req, res) => {
 };
 
 // ============================================
-// 💰 LANE 3: C2B CONFIRMATION (FIXED VERSION)
+// 💰 LANE 3: C2B CONFIRMATION WITH AUTO-REVERSAL
 // ============================================
 export const handleC2BConfirmation = async (req, res) => {
     const requestId = randomUUID();
@@ -417,7 +418,46 @@ export const handleC2BConfirmation = async (req, res) => {
                     ip: ipAddress
                 });
                 
-                return; // Don't process further, but already ACKed
+                // ============================================
+                // 🚀 AUTO-REVERSAL FOR BELOW MINIMUM AMOUNTS
+                // ============================================
+                try {
+                    console.log(`🔄 [${requestId}] INITIATING AUTO-REVERSAL for ${req.body.TransID}`);
+                    
+                    const reversalResult = await reversalService.initiateReversal(
+                        req.body.TransID,
+                        amountValidation.amount,
+                        'Below minimum transaction amount'
+                    );
+                    
+                    if (reversalResult.success) {
+                        console.log(`✅ [${requestId}] Reversal initiated successfully`);
+                        await auditService.logInfo('reversal_initiated', {
+                            requestId,
+                            transactionId: req.body.TransID,
+                            amount: amountValidation.amount,
+                            conversationId: reversalResult.data?.ConversationID
+                        });
+                    } else {
+                        console.error(`❌ [${requestId}] Reversal initiation failed:`, reversalResult.error);
+                        await auditService.logError('reversal_failed', {
+                            requestId,
+                            transactionId: req.body.TransID,
+                            amount: amountValidation.amount,
+                            error: reversalResult.error
+                        });
+                    }
+                } catch (reversalError) {
+                    console.error(`❌ [${requestId}] Reversal error:`, reversalError.message);
+                    await auditService.logError('reversal_exception', {
+                        requestId,
+                        transactionId: req.body.TransID,
+                        amount: amountValidation.amount,
+                        error: reversalError.message
+                    });
+                }
+                
+                return; // Don't process further
             }
             
             // 4. Validate input schema (with fixed BillRefNumber)
