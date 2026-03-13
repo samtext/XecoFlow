@@ -106,7 +106,7 @@ const validateAmount = (amount, transactionId = 'unknown') => {
 };
 
 // ============================================
-// ✅ VALIDATION SCHEMAS
+// ✅ VALIDATION SCHEMAS (FIXED)
 // ============================================
 const stkSchema = Joi.object({
     Body: Joi.object({
@@ -127,6 +127,7 @@ const stkSchema = Joi.object({
     }).required()
 });
 
+// ✅ FIXED: Added .allow('').default('N/A') to InvoiceNumber
 const c2bSchema = Joi.object({
     TransactionType: Joi.string().optional(),
     TransID: Joi.string().required(),
@@ -134,7 +135,7 @@ const c2bSchema = Joi.object({
     TransAmount: Joi.string().required(),
     BusinessShortCode: Joi.string().optional(),
     BillRefNumber: Joi.string().optional().allow('').default('N/A'),
-    InvoiceNumber: Joi.string().optional(),
+    InvoiceNumber: Joi.string().optional().allow('').default('N/A'), // ✅ FIXED
     OrgAccountBalance: Joi.string().optional(),
     ThirdPartyTransID: Joi.string().optional(),
     MSISDN: Joi.string().required(),
@@ -321,7 +322,7 @@ export const handleC2BValidation = async (req, res) => {
             });
         }
         
-        // 2. Validate input schema (with fixed BillRefNumber)
+        // 2. Validate input schema (with fixed BillRefNumber and InvoiceNumber)
         const { error, value } = c2bSchema.validate(req.body);
         
         if (error) {
@@ -422,18 +423,10 @@ export const handleC2BConfirmation = async (req, res) => {
                 // ============================================
                 console.log(`⚠️ [${requestId}] Below minimum payment detected - Manual refund required for ${req.body.TransID}`);
                 
-                // Optional: Add to a "pending_refunds" table for manual processing
-                // await db.from('pending_refunds').insert([{
-                //     transaction_id: req.body.TransID,
-                //     amount: amountValidation.amount,
-                //     phone: req.body.MSISDN,
-                //     created_at: new Date().toISOString()
-                // }]);
-                
                 return; // Don't process further
             }
             
-            // 4. Validate input schema (with fixed BillRefNumber)
+            // 4. Validate input schema (with fixed BillRefNumber and InvoiceNumber)
             const { error, value } = c2bSchema.validate(req.body);
             
             if (error) {
