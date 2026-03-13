@@ -48,6 +48,7 @@ class ReversalService {
     /**
      * Initiate reversal with retry logic (3 attempts)
      * FIXED: Now works even if transaction isn't in database yet
+     * FIXED: Added BASE_URL fallback to prevent "undefined" URLs
      */
     async initiateReversal(transactionId, amount, reason = 'Airtime delivery failed', requestData = null) {
         console.log(`🔄 [REVERSAL] Starting for transaction: ${transactionId}, Amount: KES ${amount}`);
@@ -96,6 +97,10 @@ class ReversalService {
                     ? 'https://api.safaricom.co.ke/mpesa/reversal/v1/request'
                     : 'https://sandbox.safaricom.co.ke/mpesa/reversal/v1/request';
 
+                // 🔧 FIX: Add fallback for BASE_URL to prevent "undefined" URLs
+                const baseUrl = process.env.BASE_URL || 'https://xecoflow.onrender.com';
+                console.log(`🔗 [REVERSAL] Using base URL: ${baseUrl}`);
+
                 // Generate unique originator conversation ID
                 const originatorConversationID = crypto.randomUUID();
 
@@ -107,8 +112,8 @@ class ReversalService {
                     Amount: amount,
                     ReceiverParty: process.env.MPESA_SHORTCODE,
                     RecieverIdentifierType: '11',
-                    ResultURL: `${process.env.BASE_URL}/api/v1/reversal/result`,
-                    QueueTimeOutURL: `${process.env.BASE_URL}/api/v1/reversal/timeout`,
+                    ResultURL: `${baseUrl}/api/v1/reversal/result`,  // ✅ FIXED
+                    QueueTimeOutURL: `${baseUrl}/api/v1/reversal/timeout`,  // ✅ FIXED
                     Remarks: reason.substring(0, 100) // M-PESA limit
                 };
 
