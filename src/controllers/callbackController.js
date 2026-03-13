@@ -2,7 +2,7 @@ import Joi from 'joi';
 import { randomUUID } from 'crypto';
 import stkService from '../services/stk.service.js';
 import c2bService from '../services/c2b.service.js';
-import reversalService from '../services/reversal.service.js'; // NEW: Import reversal service
+import reversalService from '../services/reversal.service.js';
 import * as auditService from '../services/auditService.js';
 import { transactionRules, calculateProfit } from '../config/businessRules.js';
 
@@ -424,10 +424,12 @@ export const handleC2BConfirmation = async (req, res) => {
                 try {
                     console.log(`🔄 [${requestId}] INITIATING AUTO-REVERSAL for ${req.body.TransID}`);
                     
+                    // ✅ FIXED: Pass the full request body as the 4th parameter
                     const reversalResult = await reversalService.initiateReversal(
                         req.body.TransID,
                         amountValidation.amount,
-                        'Below minimum transaction amount'
+                        'Below minimum transaction amount',
+                        req.body  // Pass the full request data
                     );
                     
                     if (reversalResult.success) {

@@ -47,8 +47,9 @@ class ReversalService {
 
     /**
      * Initiate reversal with retry logic (3 attempts)
+     * FIXED: Now works even if transaction isn't in database yet
      */
-    async initiateReversal(transactionId, amount, reason = 'Airtime delivery failed') {
+    async initiateReversal(transactionId, amount, reason = 'Airtime delivery failed', requestData = null) {
         console.log(`🔄 [REVERSAL] Starting for transaction: ${transactionId}, Amount: KES ${amount}`);
         
         let attempts = 0;
@@ -60,21 +61,31 @@ class ReversalService {
             try {
                 console.log(`📡 [REVERSAL] Attempt ${attempts}/${MAX_RETRIES} for ${transactionId}`);
                 
-                // Get transaction details
-                const { data: transaction, error: txError } = await db
-                    .from('mpesa_transactions')
-                    .select('*')
-                    .eq('transaction_id', transactionId)
-                    .single();
-
-                if (txError || !transaction) {
-                    throw new Error(`Transaction ${transactionId} not found`);
-                }
-
-                // Check if already reversed
-                if (transaction.reversal_status === 'SUCCESS') {
-                    console.log(`⚠️ [REVERSAL] Transaction ${transactionId} already reversed`);
-                    return { success: true, message: 'Already reversed' };
+                // 🚨 FIX: Don't fail if transaction not in DB - just proceed with reversal
+                // The transaction might not be saved yet (below minimum case)
+                let transaction = null;
+                try {
+                    const { data, error } = await db
+                        .from('mpesa_transactions')
+                        .select('*')
+                        .eq('transaction_id', transactionId)
+                        .maybeSingle(); // Use maybeSingle() instead of single() to avoid error
+                    
+                    if (!error && data) {
+                        transaction = data;
+                        console.log(`📦 [REVERSAL] Found transaction in DB:`, transactionId);
+                        
+                        // Check if already reversed
+                        if (transaction.reversal_status === 'SUCCESS') {
+                            console.log(`⚠️ [REVERSAL] Transaction ${transactionId} already reversed`);
+                            return { success: true, message: 'Already reversed' };
+                        }
+                    } else {
+                        console.log(`📦 [REVERSAL] Transaction ${transactionId} not in DB yet - continuing with reversal`);
+                    }
+                } catch (dbError) {
+                    console.log(`⚠️ [REVERSAL] DB check failed (non-critical):`, dbError.message);
+                    // Continue with reversal even if DB check fails
                 }
 
                 // Get M-PESA access token
@@ -98,42 +109,57 @@ class ReversalService {
                     RecieverIdentifierType: '11',
                     ResultURL: `${process.env.BASE_URL}/api/v1/reversal/result`,
                     QueueTimeOutURL: `${process.env.BASE_URL}/api/v1/reversal/timeout`,
-                    Remarks: reason
+                    Remarks: reason.substring(0, 100) // M-PESA limit
                 };
 
                 console.log(`📤 [REVERSAL] Request body:`, JSON.stringify(requestBody, null, 2));
 
-                // Call M-PESA reversal API
+                // Call M-PESA reversal API with timeout
                 const response = await axios.post(url, requestBody, {
                     headers: {
                         'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json'
-                    }
+                    },
+                    timeout: 30000 // 30 second timeout
                 });
 
                 console.log(`📥 [REVERSAL] Response:`, response.data);
 
-                // Log reversal attempt
-                await db.from('reversal_logs').insert([{
-                    transaction_id: transactionId,
-                    amount: amount,
-                    status: 'PENDING',
-                    initiated_by: 'SYSTEM',
-                    initiated_at: new Date().toISOString(),
-                    mpesa_conversation_id: response.data.ConversationID,
-                    mpesa_originator_conversation_id: response.data.OriginatorConversationID,
-                    raw_callback: response.data,
-                    attempt: attempts
-                }]);
+                // Try to log reversal attempt (don't fail if DB error)
+                try {
+                    await db.from('reversal_logs').insert([{
+                        transaction_id: transactionId,
+                        amount: amount,
+                        status: 'PENDING',
+                        initiated_by: 'SYSTEM',
+                        initiated_at: new Date().toISOString(),
+                        mpesa_conversation_id: response.data.ConversationID,
+                        mpesa_originator_conversation_id: response.data.OriginatorConversationID,
+                        raw_callback: response.data,
+                        attempt: attempts,
+                        request_data: requestData
+                    }]);
+                    console.log(`✅ [REVERSAL] Log saved to database`);
+                } catch (logError) {
+                    console.log(`⚠️ [REVERSAL] Could not save log to DB:`, logError.message);
+                    // Continue - reversal already initiated
+                }
 
-                // Update transaction status
-                await db.from('mpesa_transactions')
-                    .update({
-                        reversal_status: 'PENDING',
-                        reversal_initiated_at: new Date().toISOString(),
-                        reversal_attempts: attempts
-                    })
-                    .eq('transaction_id', transactionId);
+                // Try to update transaction status if it exists
+                if (transaction) {
+                    try {
+                        await db.from('mpesa_transactions')
+                            .update({
+                                reversal_status: 'PENDING',
+                                reversal_initiated_at: new Date().toISOString(),
+                                reversal_attempts: attempts
+                            })
+                            .eq('transaction_id', transactionId);
+                        console.log(`✅ [REVERSAL] Transaction status updated`);
+                    } catch (updateError) {
+                        console.log(`⚠️ [REVERSAL] Could not update transaction:`, updateError.message);
+                    }
+                }
 
                 return {
                     success: true,
@@ -145,16 +171,21 @@ class ReversalService {
                 lastError = error;
                 console.error(`❌ [REVERSAL] Attempt ${attempts} failed:`, error.message);
                 
-                // Log failed attempt
-                await db.from('reversal_logs').insert([{
-                    transaction_id: transactionId,
-                    amount: amount,
-                    status: 'FAILED',
-                    initiated_by: 'SYSTEM',
-                    initiated_at: new Date().toISOString(),
-                    error_message: error.message,
-                    attempt: attempts
-                }]);
+                // Try to log failed attempt
+                try {
+                    await db.from('reversal_logs').insert([{
+                        transaction_id: transactionId,
+                        amount: amount,
+                        status: 'FAILED',
+                        initiated_by: 'SYSTEM',
+                        initiated_at: new Date().toISOString(),
+                        error_message: error.message,
+                        attempt: attempts,
+                        request_data: requestData
+                    }]);
+                } catch (logError) {
+                    // Silent fail
+                }
 
                 // Wait before retry (exponential backoff)
                 if (attempts < MAX_RETRIES) {
@@ -168,13 +199,26 @@ class ReversalService {
         // All retries failed - alert admin
         console.error(`❌ [REVERSAL] All ${MAX_RETRIES} attempts failed for ${transactionId}`);
         
-        // Mark transaction for manual review
-        await db.from('mpesa_transactions')
-            .update({
-                reversal_status: 'FAILED',
-                requires_manual_review: true
-            })
-            .eq('transaction_id', transactionId);
+        // Try to mark for manual review
+        try {
+            // First check if transaction exists
+            const { data: transaction } = await db
+                .from('mpesa_transactions')
+                .select('id')
+                .eq('transaction_id', transactionId)
+                .maybeSingle();
+            
+            if (transaction) {
+                await db.from('mpesa_transactions')
+                    .update({
+                        reversal_status: 'FAILED',
+                        requires_manual_review: true
+                    })
+                    .eq('transaction_id', transactionId);
+            }
+        } catch (dbError) {
+            console.log(`⚠️ [REVERSAL] Could not mark for manual review:`, dbError.message);
+        }
 
         // Send admin alert
         await sendAdminAlert({
@@ -226,13 +270,17 @@ class ReversalService {
                 })
                 .eq('mpesa_conversation_id', result.ConversationID);
 
-            // Update transaction
-            await db.from('mpesa_transactions')
-                .update({
-                    reversal_status: resultCode === 0 ? 'SUCCESS' : 'FAILED',
-                    reversal_completed_at: new Date().toISOString()
-                })
-                .eq('transaction_id', originalTransactionId);
+            // Update transaction if it exists
+            try {
+                await db.from('mpesa_transactions')
+                    .update({
+                        reversal_status: resultCode === 0 ? 'SUCCESS' : 'FAILED',
+                        reversal_completed_at: new Date().toISOString()
+                    })
+                    .eq('transaction_id', originalTransactionId);
+            } catch (updateError) {
+                console.log(`⚠️ [REVERSAL] Could not update transaction:`, updateError.message);
+            }
 
             if (resultCode === 0) {
                 console.log(`✅ [REVERSAL] Success for transaction ${originalTransactionId}`);
@@ -244,7 +292,6 @@ class ReversalService {
                     // Invalid or already reversed - don't retry
                     console.log(`📌 [REVERSAL] Permanent failure, not retrying`);
                 } else {
-                    // Maybe retry? This would be handled by the queue job
                     console.log(`📌 [REVERSAL] Temporary failure, will be retried by queue`);
                 }
             }
