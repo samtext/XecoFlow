@@ -106,7 +106,7 @@ const validateAmount = (amount, transactionId = 'unknown') => {
 };
 
 // ============================================
-// ✅ VALIDATION SCHEMAS (FIXED)
+// ✅ VALIDATION SCHEMAS (FULLY FIXED)
 // ============================================
 const stkSchema = Joi.object({
     Body: Joi.object({
@@ -127,21 +127,24 @@ const stkSchema = Joi.object({
     }).required()
 });
 
-// ✅ FIXED: Added .allow('').default('N/A') to InvoiceNumber
+// ✅ COMPLETELY FIXED - ALL optional fields now allow empty strings
 const c2bSchema = Joi.object({
-    TransactionType: Joi.string().optional(),
-    TransID: Joi.string().required(),
-    TransTime: Joi.string().optional(),
-    TransAmount: Joi.string().required(),
-    BusinessShortCode: Joi.string().optional(),
+    // Optional fields that can be empty - ALL FIXED
+    TransactionType: Joi.string().optional().allow('').default('N/A'),
+    TransTime: Joi.string().optional().allow('').default('N/A'),
+    BusinessShortCode: Joi.string().optional().allow('').default('N/A'),
     BillRefNumber: Joi.string().optional().allow('').default('N/A'),
-    InvoiceNumber: Joi.string().optional().allow('').default('N/A'), // ✅ FIXED
-    OrgAccountBalance: Joi.string().optional(),
-    ThirdPartyTransID: Joi.string().optional(),
-    MSISDN: Joi.string().required(),
-    FirstName: Joi.string().optional(),
-    MiddleName: Joi.string().optional(),
-    LastName: Joi.string().optional()
+    InvoiceNumber: Joi.string().optional().allow('').default('N/A'),
+    OrgAccountBalance: Joi.string().optional().allow('').default('N/A'),
+    ThirdPartyTransID: Joi.string().optional().allow('').default('N/A'),
+    FirstName: Joi.string().optional().allow('').default('N/A'),
+    MiddleName: Joi.string().optional().allow('').default('N/A'),
+    LastName: Joi.string().optional().allow('').default('N/A'),
+    
+    // Required fields
+    TransID: Joi.string().required(),
+    TransAmount: Joi.string().required(),
+    MSISDN: Joi.string().required()
 });
 
 // ============================================
@@ -322,7 +325,7 @@ export const handleC2BValidation = async (req, res) => {
             });
         }
         
-        // 2. Validate input schema (with fixed BillRefNumber and InvoiceNumber)
+        // 2. Validate input schema (ALL optional fields now allow empty)
         const { error, value } = c2bSchema.validate(req.body);
         
         if (error) {
@@ -426,7 +429,7 @@ export const handleC2BConfirmation = async (req, res) => {
                 return; // Don't process further
             }
             
-            // 4. Validate input schema (with fixed BillRefNumber and InvoiceNumber)
+            // 4. Validate input schema (ALL optional fields now allow empty)
             const { error, value } = c2bSchema.validate(req.body);
             
             if (error) {
