@@ -334,7 +334,8 @@ const allowedOrigins = [
     'http://localhost:3000',
     'http://localhost:5173',
     'http://localhost:5174',
-    'https://book-store-sigma-mauve.vercel.app'
+    'https://book-store-sigma-mauve.vercel.app',
+    'http://192.168.1.3:5174'
 ];
 
 if (process.env.DOMAIN) {

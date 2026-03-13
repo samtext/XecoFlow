@@ -5,7 +5,8 @@ const whitelist = [
     'https://your-frontend-site.netlify.app', 
     'http://localhost:3000', // Local development
     'http://localhost:5173',
-    'https://book-store-sigma-mauve.vercel.app'
+    'https://book-store-sigma-mauve.vercel.app',
+    'http://192.168.1.3:5174'
 ];
 
 const corsOptions = {
