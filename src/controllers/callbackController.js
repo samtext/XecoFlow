@@ -2,7 +2,6 @@ import Joi from 'joi';
 import { randomUUID } from 'crypto';
 import stkService from '../services/stk.service.js';
 import c2bService from '../services/c2b.service.js';
-import reversalService from '../services/reversal.service.js';
 import * as auditService from '../services/auditService.js';
 import { transactionRules, calculateProfit } from '../config/businessRules.js';
 
@@ -386,7 +385,7 @@ export const handleC2BValidation = async (req, res) => {
 };
 
 // ============================================
-// 💰 LANE 3: C2B CONFIRMATION WITH AUTO-REVERSAL
+// 💰 LANE 3: C2B CONFIRMATION (REVERSAL DISABLED)
 // ============================================
 export const handleC2BConfirmation = async (req, res) => {
     const requestId = randomUUID();
@@ -419,45 +418,17 @@ export const handleC2BConfirmation = async (req, res) => {
                 });
                 
                 // ============================================
-                // 🚀 AUTO-REVERSAL FOR BELOW MINIMUM AMOUNTS
+                // ⚠️ REVERSAL DISABLED - Manual process required
                 // ============================================
-                try {
-                    console.log(`🔄 [${requestId}] INITIATING AUTO-REVERSAL for ${req.body.TransID}`);
-                    
-                    // ✅ FIXED: Pass the full request body as the 4th parameter
-                    const reversalResult = await reversalService.initiateReversal(
-                        req.body.TransID,
-                        amountValidation.amount,
-                        'Below minimum transaction amount',
-                        req.body  // Pass the full request data
-                    );
-                    
-                    if (reversalResult.success) {
-                        console.log(`✅ [${requestId}] Reversal initiated successfully`);
-                        await auditService.logInfo('reversal_initiated', {
-                            requestId,
-                            transactionId: req.body.TransID,
-                            amount: amountValidation.amount,
-                            conversationId: reversalResult.data?.ConversationID
-                        });
-                    } else {
-                        console.error(`❌ [${requestId}] Reversal initiation failed:`, reversalResult.error);
-                        await auditService.logError('reversal_failed', {
-                            requestId,
-                            transactionId: req.body.TransID,
-                            amount: amountValidation.amount,
-                            error: reversalResult.error
-                        });
-                    }
-                } catch (reversalError) {
-                    console.error(`❌ [${requestId}] Reversal error:`, reversalError.message);
-                    await auditService.logError('reversal_exception', {
-                        requestId,
-                        transactionId: req.body.TransID,
-                        amount: amountValidation.amount,
-                        error: reversalError.message
-                    });
-                }
+                console.log(`⚠️ [${requestId}] Below minimum payment detected - Manual refund required for ${req.body.TransID}`);
+                
+                // Optional: Add to a "pending_refunds" table for manual processing
+                // await db.from('pending_refunds').insert([{
+                //     transaction_id: req.body.TransID,
+                //     amount: amountValidation.amount,
+                //     phone: req.body.MSISDN,
+                //     created_at: new Date().toISOString()
+                // }]);
                 
                 return; // Don't process further
             }

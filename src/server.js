@@ -11,7 +11,6 @@ import { createClient } from '@supabase/supabase-js';
 import mpesaRoutes from './routes/mpesa.routes.js';
 import apiRoutes from './routes/apiRoutes.js';
 import authRoutes from './routes/authRoutes.js';
-import reversalRoutes from './routes/reversal.routes.js'; // ADDED: Reversal routes
 
 const app = express();
 
@@ -361,7 +360,8 @@ app.use(cors({
 app.use((req, res, next) => {
     const start = Date.now();
     
-    if (req.url.includes('c2b') || req.url.includes('callback') || req.url.includes('reversal')) {
+    // Removed 'reversal' from URL check
+    if (req.url.includes('c2b') || req.url.includes('callback')) {
         console.log('\n' + '='.repeat(50));
         console.log(`📡 [WEBHOOK] ${req.method} ${req.url}`);
         console.log(`🏠 FROM_IP: ${req.ip} (original: ${req.connection.remoteAddress})`);
@@ -500,8 +500,8 @@ app.get('/', (req, res) => {
         endpoints: {
             health: '/health',
             test: '/simple-callback',
-            c2b: '/api/v1/gateway/c2b-callback',
-            reversal: '/api/v1/reversal/status/:transactionId'  // ADDED
+            c2b: '/api/v1/gateway/c2b-callback'
+            // Removed reversal endpoint
         }
     });
 });
@@ -556,7 +556,7 @@ app.use('/api/v1/gateway', mpesaRoutes);
 app.use('/api/v1/payments', mpesaRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1', apiRoutes);
-app.use('/api/v1/reversal', reversalRoutes);  // ADDED: Reversal routes
+// Removed reversal routes
 
 // ============================================
 // 🛑 404 HANDLER

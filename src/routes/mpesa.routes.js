@@ -199,7 +199,7 @@ router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 🛡️ C2B VALIDATION - FIXED: Removed duplicate /payments
+// 🛡️ C2B VALIDATION
 // ============================================
 router.post('/c2b-validation', ...webhookMiddleware, async (req, res) => {
     console.log('\n⚪ ===== C2B VALIDATION RECEIVED =====');
@@ -230,7 +230,7 @@ router.post('/c2b-validation', ...webhookMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 💰 C2B CONFIRMATION - FIXED: Removed duplicate /payments
+// 💰 C2B CONFIRMATION (Reversal Disabled)
 // ============================================
 router.post('/c2b-confirmation', ...webhookMiddleware, async (req, res) => {
     try {
@@ -242,7 +242,8 @@ router.post('/c2b-confirmation', ...webhookMiddleware, async (req, res) => {
         
         // Check minimum amount BEFORE processing
         if (amount < 10) {
-            console.log(`🚫 Amount below minimum - WILL NEED REFUND!`);
+            console.log(`🚫 Amount below minimum - Manual refund required for transaction ${req.body.TransID}`);
+            // No reversal attempt - just log for manual processing
         }
         
         await handleC2BConfirmation(req, res);
