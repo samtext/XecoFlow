@@ -113,7 +113,7 @@ class C2bService {
     }
 
     /**
-     * 🌐 Forward webhook to business
+     * 🌐 Forward webhook to business (UPDATED with logging)
      */
     async forwardWebhook(transactionId, businessShortcode, transactionData, callbackData) {
         try {
@@ -152,27 +152,66 @@ class C2bService {
                 headers['X-Webhook-Signature'] = signature;
             }
 
-            // Fire and forget webhook
-            axios.post(business.webhook_url, payload, { 
+            // Send webhook with proper error handling
+            const response = await axios.post(business.webhook_url, payload, { 
                 headers, 
-                timeout: 5000 
-            }).catch(err => {
-                console.error(`❌ Webhook delivery failed: ${err.message}`);
+                timeout: 5000,
+                validateStatus: null // Don't throw on error status
             });
 
+            const success = response.status >= 200 && response.status < 300;
+
+            // ✅ LOG WEBHOOK ATTEMPT
+            await db.logWebhookAttempt(
+                transactionId,
+                businessShortcode,
+                1, // attempt number
+                success,
+                {
+                    status: response.status,
+                    data: response.data
+                }
+            );
+
+            if (success) {
+                console.log(`✅ Webhook successfully forwarded for ${transactionId}`);
+                
+                // ✅ MARK AS FORWARDED
+                await db.markWebhookForwarded(transactionId, businessShortcode);
+                
+                await db.logTransactionEvent(
+                    transactionId,
+                    businessShortcode,
+                    'WEBHOOK_SUCCESS',
+                    { status: response.status }
+                );
+            } else {
+                console.warn(`⚠️ Webhook returned status ${response.status} for ${transactionId}`);
+            }
+
         } catch (error) {
-            console.error(`❌ Webhook forwarding error: ${error.message}`);
+            console.error(`❌ Webhook delivery failed: ${error.message}`);
+            
+            // ✅ LOG FAILED ATTEMPT
+            await db.logWebhookAttempt(
+                transactionId,
+                businessShortcode,
+                1,
+                false,
+                { error: error.message, code: error.code }
+            );
+            
             await db.logCriticalFailure(
                 transactionId,
                 businessShortcode,
                 'WEBHOOK_FORWARDING_FAILED',
-                { error: error.message }
+                { error: error.message, stack: error.stack }
             ).catch(() => {});
         }
     }
 
     /**
-     * 💰 CONFIRMATION - FIXED: Using db.from() for inserts
+     * 💰 CONFIRMATION - UPDATED with async webhook handling
      */
     async handleConfirmation(c2bData) {
         console.log(`\n💰 [C2B_RECEIPT]: ${c2bData.TransID} | Amount: ${c2bData.TransAmount} | From: ${c2bData.MSISDN}`);
@@ -180,7 +219,7 @@ class C2bService {
         try {
             const businessShortcode = c2bData.BusinessShortCode;
             
-            // ✅ FIXED: Use db.from() for inserts, not the read helpers
+            // Log callback for audit
             await db.from('mpesa_callback_logs').insert([{
                 trans_id: c2bData.TransID,
                 checkout_request_id: c2bData.TransID,
@@ -219,6 +258,7 @@ class C2bService {
                 airtime_status: 'PENDING',
                 business_shortcode: businessShortcode,
                 request_type: businessShortcode ? 'EXTERNAL' : 'INTERNAL',
+                webhook_forwarded: false, // Initialize as false
                 metadata: {
                     first_name: c2bData.FirstName,
                     middle_name: c2bData.MiddleName,
@@ -230,7 +270,7 @@ class C2bService {
                 updated_at: new Date().toISOString()
             };
 
-            // ✅ FIXED: Use db.from() with retry logic
+            // Insert with retry logic
             let retries = 3;
             let lastError = null;
             let savedData = null;
@@ -284,14 +324,17 @@ class C2bService {
                 ).catch(() => {});
             }
 
-            // Forward webhook if external business
+            // Forward webhook if external business (DO NOT AWAIT - let it run in background)
             if (businessShortcode && savedData) {
-                this.forwardWebhook(
-                    c2bData.TransID,
-                    businessShortcode,
-                    savedData,
-                    c2bData
-                ).catch(err => console.error(`Webhook error: ${err.message}`));
+                // Use Promise to ensure it runs but don't await
+                Promise.resolve().then(() => {
+                    this.forwardWebhook(
+                        c2bData.TransID,
+                        businessShortcode,
+                        savedData,
+                        c2bData
+                    ).catch(err => console.error(`Webhook error: ${err.message}`));
+                });
             }
 
             // Log success event
