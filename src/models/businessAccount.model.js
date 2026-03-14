@@ -1,8 +1,7 @@
-import { db } from '../config/db.js';
+// Renamed the import to supabaseAdmin to avoid naming conflict with the export
+import { db as supabaseAdmin } from '../config/db.js'; 
 import { DB_MAPPING } from './systemRules.js'; 
 import crypto from 'crypto';
-
-// ❌ REMOVED: import BusinessAccount from '../models/businessAccount.model.js';
 
 /**
  * BIG-SYSTEM-V1.2 | DATABASE MANAGER
@@ -171,10 +170,10 @@ export const db = {
     },
 
     /**
-     * ✅ Client-side mappings (RLS protected)
+     * ✅ Client-side mappings (Using the same admin connection for consistency here)
      */
-    transactions: () => supabase.from(DB_MAPPING.TABLES.TRANSACTIONS).select('*'),
-    disbursements: () => supabase.from(DB_MAPPING.TABLES.DISBURSEMENTS).select('*'),
+    transactions: () => supabaseAdmin.from(DB_MAPPING.TABLES.TRANSACTIONS).select('*'),
+    disbursements: () => supabaseAdmin.from(DB_MAPPING.TABLES.DISBURSEMENTS).select('*'),
 
     /**
      * ✅ Administrative mappings
@@ -388,10 +387,6 @@ export const db = {
             return { success: false, error: error.message };
         }
     },
-
-    // =========================================================
-    // 🔐 INFRASTRUCTURE HELPER FUNCTIONS
-    // =========================================================
 
     /**
      * ✅ Log webhook attempt
@@ -628,10 +623,6 @@ export const db = {
             return { success: false, error: error.message };
         }
     },
-
-    // =========================================================
-    // 🔐 Security & Encryption Utilities
-    // =========================================================
 
     /**
      * ✅ Constant-time string comparison
