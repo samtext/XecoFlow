@@ -5,7 +5,7 @@ dotenv.config(); // This will pull keys directly from your .env file
 // Use keys from .env to avoid manual copy-paste errors
 const CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY?.trim();
 const CONSUMER_SECRET = process.env.MPESA_CONSUMER_SECRET?.trim();
-const TILL_NUMBER = "4938110"; 
+const TILL_NUMBER = "9203342";
 
 const runRegistration = async () => {
     try {
