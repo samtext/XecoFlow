@@ -1,12 +1,12 @@
 import { supabase, supabaseAdmin } from './supabase.js';
 import { DB_MAPPING } from './systemRules.js'; 
-import axios from 'axios';
 import crypto from 'crypto';
-import BusinessAccount from '../models/businessAccount.model.js'; // Import the model
+
+// ❌ REMOVED: import BusinessAccount from '../models/businessAccount.model.js';
 
 /**
  * BIG-SYSTEM-V1.2 | DATABASE MANAGER
- * REFACTORED: Now uses BusinessAccount model for all business operations
+ * INFRASTRUCTURE LAYER ONLY - No business logic
  */
 export const db = {
     /**
@@ -84,7 +84,6 @@ export const db = {
                 query = query.eq('business_shortcode', businessShortcode);
             }
             
-            // Time range filter
             const now = new Date();
             if (timeRange === 'day') {
                 const today = new Date(now.setHours(0, 0, 0, 0));
@@ -104,7 +103,6 @@ export const db = {
             
             if (error) throw error;
             
-            // Group by business_shortcode if no specific till
             if (!businessShortcode && data) {
                 const grouped = {};
                 data.forEach(row => {
@@ -128,7 +126,6 @@ export const db = {
                     grouped[code].total_amount += amount;
                     grouped[code].transaction_count++;
                     
-                    // Track by request type
                     if (!grouped[code].by_request_type[requestType]) {
                         grouped[code].by_request_type[requestType] = {
                             count: 0,
@@ -138,7 +135,6 @@ export const db = {
                     grouped[code].by_request_type[requestType].count++;
                     grouped[code].by_request_type[requestType].amount += amount;
                     
-                    // Status breakdown
                     if (row.status === 'COMPLETED' || row.status === 'PAYMENT_SUCCESS') {
                         grouped[code].successful_count++;
                         grouped[code].successful_amount += amount;
@@ -221,14 +217,13 @@ export const db = {
             
             if (error) throw error;
             
-            // Log access for audit trail
             if (data) {
-                await db.logTransactionEvent(
+                await this.logTransactionEvent(
                     transactionId,
                     businessShortcode || data.business_shortcode,
                     'TRANSACTION_ACCESSED',
                     { accessed_at: new Date().toISOString() }
-                ).catch(() => {}); // Non-blocking
+                ).catch(() => {});
             }
             
             return { success: true, data };
@@ -275,7 +270,6 @@ export const db = {
                 
                 summary.total_amount += amount;
                 
-                // Track by request type
                 if (!summary.by_request_type[requestType]) {
                     summary.by_request_type[requestType] = {
                         count: 0,
@@ -285,7 +279,6 @@ export const db = {
                 summary.by_request_type[requestType].count++;
                 summary.by_request_type[requestType].amount += amount;
                 
-                // Status breakdown
                 if (t.status === 'COMPLETED' || t.status === 'PAYMENT_SUCCESS') {
                     summary.successful_count++;
                     summary.successful_amount += amount;
@@ -297,7 +290,6 @@ export const db = {
                     summary.pending_amount += amount;
                 }
                 
-                // Time-based breakdown
                 const txDate = new Date(t.created_at).toISOString().split('T')[0];
                 if (txDate === today) {
                     summary.today_count++;
@@ -397,294 +389,101 @@ export const db = {
         }
     },
 
+    // =========================================================
+    // 🔐 INFRASTRUCTURE HELPER FUNCTIONS
+    // =========================================================
+
     /**
-     * ✅ Get all transactions that need healing
+     * ✅ Log webhook attempt
      */
-    getStuckTransactions: async (businessShortcode = null, minutesOld = 5) => {
+    logWebhookAttempt: async (transactionId, businessShortcode, attempt, success, response) => {
         try {
-            let query = supabaseAdmin
-                .from('airtime_transactions')
-                .select('*')
-                .eq('status', 'PENDING_PAYMENT')
-                .lt('created_at', new Date(Date.now() - minutesOld * 60000).toISOString());
-            
-            if (businessShortcode) {
-                query = query.eq('business_shortcode', businessShortcode);
-            }
-            
-            const { data, error } = await query;
+            const { error } = await supabaseAdmin
+                .from('webhook_attempts')
+                .insert([{
+                    transaction_id: transactionId,
+                    business_shortcode: businessShortcode,
+                    attempt_number: attempt,
+                    success: success,
+                    response_status: response?.status,
+                    response_body: typeof response?.data === 'object' ? response.data : { message: response?.data },
+                    attempted_at: new Date().toISOString()
+                }]);
             
             if (error) throw error;
-            return { success: true, data };
+            return { success: true };
         } catch (error) {
-            console.error("❌ DB_ERROR: Failed to get stuck transactions:", error.message);
+            console.error("❌ DB_ERROR: Failed to log webhook attempt:", error.message);
             return { success: false, error: error.message };
         }
     },
 
     /**
-     * ✅ Get transactions for reconciliation (daily check)
+     * ✅ Log critical failure
      */
-    getTransactionsForReconciliation: async (date) => {
+    logCriticalFailure: async (transactionId, businessShortcode, failureType, data) => {
         try {
-            const startDate = new Date(date);
-            startDate.setHours(0, 0, 0, 0);
-            
-            const endDate = new Date(date);
-            endDate.setHours(23, 59, 59, 999);
-            
-            const { data, error } = await supabaseAdmin
-                .from('airtime_transactions')
-                .select('*')
-                .gte('created_at', startDate.toISOString())
-                .lte('created_at', endDate.toISOString())
-                .in('status', ['PAYMENT_SUCCESS', 'COMPLETED']);
+            const { error } = await supabaseAdmin
+                .from('critical_failures')
+                .insert([{
+                    transaction_id: transactionId,
+                    business_shortcode: businessShortcode,
+                    failure_type: failureType,
+                    data: data,
+                    resolved: false,
+                    created_at: new Date().toISOString()
+                }]);
             
             if (error) throw error;
             
-            const grouped = {};
-            data.forEach(tx => {
-                const code = tx.business_shortcode || 'unknown';
-                if (!grouped[code]) {
-                    grouped[code] = {
-                        total_amount: 0,
-                        count: 0,
-                        transactions: []
-                    };
-                }
-                grouped[code].total_amount += parseFloat(tx.amount) || 0;
-                grouped[code].count++;
-                grouped[code].transactions.push(tx.transaction_id);
-            });
+            console.error(`🚨 CRITICAL FAILURE [${failureType}]: Transaction ${transactionId}`);
             
-            return { success: true, data: grouped };
+            return { success: true };
         } catch (error) {
-            console.error("❌ DB_ERROR: Failed to get reconciliation data:", error.message);
-            return { success: false, error: error.message };
-        }
-    },
-
-    // =========================================================
-    // 🔐 SECURITY METHODS (Now use BusinessAccount model)
-    // =========================================================
-
-    /**
-     * ✅ DELEGATED: Now uses BusinessAccount model
-     */
-    getBusinessByApiKey: async (apiKey) => {
-        return BusinessAccount.findByApiKey(apiKey);
-    },
-
-    /**
-     * ✅ DELEGATED: Now uses BusinessAccount model
-     */
-    registerBusiness: async (businessData) => {
-        return BusinessAccount.create(businessData);
-    },
-
-    /**
-     * ✅ DELEGATED: Now uses BusinessAccount model
-     */
-    getBusinessCallback: async (businessShortcode) => {
-        const { success, data } = await BusinessAccount.findByShortcode(businessShortcode);
-        if (!success || !data) {
-            return { success: false, error: 'Business not found' };
-        }
-        return { success: true, data: data.getWebhookConfig() };
-    },
-
-    /**
-     * ✅ DELEGATED: Now uses BusinessAccount model
-     */
-    checkRateLimit: async (businessShortcode) => {
-        return BusinessAccount.checkRateLimit(businessShortcode);
-    },
-
-    /**
-     * ✅ DELEGATED: Now uses BusinessAccount model
-     */
-    getAllActiveBusinesses: async () => {
-        return BusinessAccount.getAllActive();
-    },
-
-    // =========================================================
-    // 🌐 WEBHOOK FORWARDER SERVICE
-    // =========================================================
-
-    /**
-     * Queue webhook for async delivery
-     */
-    queueWebhookForDelivery: (transactionId, businessShortcode, mpesaData) => {
-        setImmediate(async () => {
-            try {
-                await db.forwardWebhook(transactionId, businessShortcode, mpesaData);
-            } catch (error) {
-                console.error(`❌ Queued webhook failed for ${transactionId}:`, error.message);
-            }
-        });
-        return { queued: true };
-    },
-
-    /**
-     * Forward webhook to business
-     */
-    forwardWebhook: async (transactionId, businessShortcode, mpesaData) => {
-        console.log(`🔄 Forwarding webhook for transaction ${transactionId} to business ${businessShortcode}`);
-        
-        try {
-            const { data: config } = await db.getBusinessCallback(businessShortcode);
-            if (!config?.webhook_url) {
-                console.error(`❌ Webhook failed: No URL configured for business ${businessShortcode}`);
-                return { success: false };
-            }
-
-            const payload = {
-                transaction_id: transactionId,
-                status: mpesaData.ResultCode === 0 ? 'SUCCESS' : 'FAILED',
-                mpesa_receipt: mpesaData.TransID || null,
-                message: mpesaData.ResultDesc,
-                amount: mpesaData.TransAmount,
-                phone: mpesaData.MSISDN,
-                timestamp: new Date().toISOString(),
-                raw_mpesa: mpesaData
-            };
-
-            const headers = {
-                'Content-Type': 'application/json',
-                'User-Agent': 'Xeco-Gateway-Forwarder/1.2',
-                'X-Forwarded-By': 'Xeco-Gateway'
-            };
-
-            if (config.webhook_secret) {
-                const signature = BusinessAccount.generateWebhookSignature(
-                    payload, 
-                    config.webhook_secret
-                );
-                headers['X-Webhook-Signature'] = signature;
-                headers['X-Webhook-Signature-Version'] = 'v1';
-            }
-
-            if (config.callback_headers) {
-                Object.assign(headers, config.callback_headers);
-            }
-
-            await db.logTransactionEvent(
-                transactionId,
-                businessShortcode,
-                'WEBHOOK_ATTEMPT_STARTED',
-                { attempt: 1, url: config.webhook_url }
-            );
-
-            const response = await axios.post(config.webhook_url, payload, {
-                headers,
-                timeout: 10000,
-                maxRedirects: 0,
-                validateStatus: null
-            });
-
-            const success = response.status >= 200 && response.status < 300;
-
-            if (success) {
-                console.log(`✅ Webhook successfully forwarded for ${transactionId}`);
-                await db.logTransactionEvent(
-                    transactionId,
-                    businessShortcode,
-                    'WEBHOOK_SUCCESS',
-                    { status: response.status }
-                );
-            }
-
-            return { success };
-        } catch (error) {
-            console.error(`⚠️ Webhook forwarding error for ${transactionId}:`, error.message);
+            console.error("❌ CRITICAL: Failed to log critical failure:", error.message);
             return { success: false, error: error.message };
         }
     },
 
     /**
-     * Retry failed webhooks (uses BusinessAccount model)
-     */
-    retryFailedWebhooks: async (maxAttempts = 3) => {
-        console.log("🔄 Starting webhook retry process...");
-        
-        try {
-            const pending = await db.getPendingWebhooks();
-            
-            if (!pending.success || !pending.data.length) {
-                console.log("📭 No pending webhooks to retry");
-                return { success: true, count: 0 };
-            }
-
-            const transactionIds = pending.data.map(tx => tx.transaction_id);
-            
-            const { data: transactions } = await supabaseAdmin
-                .from('airtime_transactions')
-                .select('*')
-                .in('transaction_id', transactionIds);
-            
-            const txMap = new Map(transactions.map(t => [t.transaction_id, t]));
-
-            let retried = 0;
-
-            for (const tx of pending.data) {
-                const fullTx = txMap.get(tx.transaction_id);
-                if (!fullTx) continue;
-
-                const result = await db.forwardWebhook(
-                    tx.transaction_id,
-                    tx.business_shortcode,
-                    fullTx
-                );
-
-                if (result.success) retried++;
-                
-                await new Promise(r => setTimeout(r, 500));
-            }
-
-            return { success: true, retried, total: pending.data.length };
-        } catch (error) {
-            console.error("❌ Failed to retry webhooks:", error.message);
-            return { success: false, error: error.message };
-        }
-    },
-
-    /**
-     * Get pending webhooks
+     * ✅ Get pending webhooks
      */
     getPendingWebhooks: async (maxAgeMinutes = 60) => {
         try {
             const cutoffTime = new Date(Date.now() - maxAgeMinutes * 60000).toISOString();
             
-            const { data, error } = await supabaseAdmin
+            const { data: transactions, error } = await supabaseAdmin
                 .from('airtime_transactions')
-                .select(`
-                    transaction_id,
-                    business_shortcode
-                `)
+                .select('transaction_id, business_shortcode')
                 .eq('request_type', 'EXTERNAL')
                 .eq('status', 'PAYMENT_SUCCESS')
                 .eq('webhook_forwarded', false)
                 .gte('created_at', cutoffTime);
             
             if (error) throw error;
-            
-            const pending = [];
-            
-            for (const tx of data) {
-                const { data: attempts } = await supabaseAdmin
-                    .from('webhook_attempts')
-                    .select('attempt_number, success')
-                    .eq('transaction_id', tx.transaction_id)
-                    .order('attempt_number', { ascending: false })
-                    .limit(1);
-                
-                const lastAttempt = attempts && attempts[0];
-                
-                if (!lastAttempt || !lastAttempt.success) {
-                    pending.push(tx);
+            if (!transactions.length) return { success: true, data: [] };
+
+            const transactionIds = transactions.map(t => t.transaction_id);
+
+            const { data: attempts } = await supabaseAdmin
+                .from('webhook_attempts')
+                .select('transaction_id, success, attempt_number')
+                .in('transaction_id', transactionIds)
+                .order('attempt_number', { ascending: false });
+
+            const attemptMap = {};
+            attempts?.forEach(a => {
+                if (!attemptMap[a.transaction_id] || 
+                    a.attempt_number > attemptMap[a.transaction_id].attempt_number) {
+                    attemptMap[a.transaction_id] = a;
                 }
-            }
-            
+            });
+
+            const pending = transactions.filter(tx => {
+                const lastAttempt = attemptMap[tx.transaction_id];
+                return !lastAttempt || !lastAttempt.success;
+            });
+
             return { success: true, data: pending };
         } catch (error) {
             console.error("❌ DB_ERROR: Failed to get pending webhooks:", error.message);
@@ -693,7 +492,7 @@ export const db = {
     },
 
     /**
-     * Mark webhook as forwarded
+     * ✅ Mark webhook as forwarded
      */
     markWebhookForwarded: async (transactionId, businessShortcode) => {
         try {
@@ -708,7 +507,7 @@ export const db = {
             
             if (error) throw error;
             
-            await db.logTransactionEvent(
+            await this.logTransactionEvent(
                 transactionId,
                 businessShortcode,
                 'CLIENT_WEBHOOK_FORWARDED',
@@ -723,7 +522,7 @@ export const db = {
     },
 
     /**
-     * Create external transaction
+     * ✅ Create external transaction
      */
     createExternalTransaction: async (businessShortcode, transactionData) => {
         try {
@@ -744,7 +543,7 @@ export const db = {
             
             if (error) throw error;
             
-            await db.logTransactionEvent(
+            await this.logTransactionEvent(
                 data.transaction_id,
                 businessShortcode,
                 'STK_INITIATED_BY_CLIENT',
@@ -759,32 +558,38 @@ export const db = {
     },
 
     /**
-     * Record M-PESA callback
+     * ✅ Record M-PESA callback
      */
     recordMpesaCallback: async (transactionId, businessShortcode, callbackData) => {
         try {
-            await db.logTransactionEvent(
+            await this.logTransactionEvent(
                 transactionId,
                 businessShortcode,
                 'MPESA_CALLBACK_RECEIVED',
                 { callback: callbackData }
             );
             
-            const { error } = await supabaseAdmin
+            const newStatus = callbackData.ResultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
+
+            const { data, error } = await supabaseAdmin
                 .from('airtime_transactions')
                 .update({
-                    status: callbackData.ResultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED',
+                    status: newStatus,
                     mpesa_receipt: callbackData.TransID,
                     updated_at: new Date().toISOString()
                 })
                 .eq('transaction_id', transactionId)
-                .eq('business_shortcode', businessShortcode);
+                .eq('business_shortcode', businessShortcode)
+                .select()
+                .single();
             
             if (error) throw error;
             
-            db.queueWebhookForDelivery(transactionId, businessShortcode, callbackData);
-            
-            return { success: true };
+            return { 
+                success: true, 
+                data,
+                shouldForwardWebhook: callbackData.ResultCode === 0
+            };
         } catch (error) {
             console.error("❌ DB_ERROR: Failed to record M-PESA callback:", error.message);
             return { success: false, error: error.message };
@@ -792,7 +597,7 @@ export const db = {
     },
 
     /**
-     * Health check
+     * ✅ Health check
      */
     getDetailedHealth: async () => {
         try {
@@ -800,11 +605,11 @@ export const db = {
                 timestamp: new Date().toISOString(),
                 services: {},
                 transactions: {},
-                businesses: {},
-                webhooks: {}
+                webhooks: {},
+                critical_failures: {}
             };
             
-            const dbHealth = await db.checkConnection();
+            const dbHealth = await this.checkConnection();
             results.services.database = dbHealth;
             
             const { data: counts } = await supabaseAdmin
@@ -814,10 +619,7 @@ export const db = {
             
             if (counts) results.transactions.stuck = counts;
             
-            const { data: activeBusinesses } = await BusinessAccount.getAllActive();
-            results.businesses.active = activeBusinesses?.length || 0;
-            
-            const pendingWebhooks = await db.getPendingWebhooks(1440);
+            const pendingWebhooks = await this.getPendingWebhooks(1440);
             results.webhooks.pending = pendingWebhooks.data?.length || 0;
             
             return { success: true, data: results };
@@ -828,14 +630,45 @@ export const db = {
     },
 
     // =========================================================
-    // 🔐 Encryption (Keep as is - these are utility functions)
+    // 🔐 Security & Encryption Utilities
     // =========================================================
 
-    hashApiKey: BusinessAccount.hashApiKey,
-    generateApiKey: BusinessAccount.generateApiKey,
-    generateWebhookSignature: BusinessAccount.generateWebhookSignature,
-    verifyWebhookSignature: BusinessAccount.verifyWebhookSignature,
+    /**
+     * ✅ Constant-time string comparison
+     */
+    safeCompare: (a, b) => {
+        try {
+            if (!a || !b) return false;
+            return crypto.timingSafeEqual(
+                Buffer.from(a, 'utf8'),
+                Buffer.from(b, 'utf8')
+            );
+        } catch (error) {
+            console.error("❌ Safe compare error:", error.message);
+            return false;
+        }
+    },
 
+    /**
+     * ✅ Hash a string
+     */
+    hashString: (input) => {
+        return crypto
+            .createHash('sha256')
+            .update(input)
+            .digest('hex');
+    },
+
+    /**
+     * ✅ Generate secure token
+     */
+    generateSecureToken: () => {
+        return crypto.randomBytes(32).toString('hex');
+    },
+
+    /**
+     * ✅ Encrypt sensitive data
+     */
     encryptSensitiveData: async (data) => {
         try {
             const encryptionKey = process.env.ENCRYPTION_KEY;
@@ -868,6 +701,9 @@ export const db = {
         }
     },
 
+    /**
+     * ✅ Decrypt sensitive data
+     */
     decryptSensitiveData: async (encryptedData) => {
         try {
             const encryptionKey = process.env.ENCRYPTION_KEY;
@@ -898,9 +734,9 @@ export const db = {
 
 // Log operational status
 console.log("🚀 XECO-ENGINE: Database Abstraction Layer Operational");
-console.log("🏦 Multi-Till Support: Enabled - Business isolation active");
-console.log("📊 Audit Trail: Enabled - All transactions are logged");
+console.log("🏦 Multi-Till Support: Enabled");
+console.log("📊 Audit Trail: Enabled");
 console.log("🔄 Retry Logic: Exponential backoff configured");
-console.log("🌐 Gateway Mode: Ready - Multi-tenant support active");
-console.log("📡 Webhook Forwarder: Active - Async delivery enabled");
-console.log("🔐 Security: API key hashing & AES-256 encryption active");
+console.log("📡 Webhook Logging: Enabled");
+console.log("🚨 Critical Failure Tracking: Active");
+console.log("🔐 Security: AES-256 encryption, constant-time comparison");
