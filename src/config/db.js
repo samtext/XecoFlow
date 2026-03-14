@@ -492,7 +492,7 @@ export const db = {
     },
 
     /**
-     * ✅ Mark webhook as forwarded
+     * ✅ Mark webhook as forwarded - FIXED: Use db.logTransactionEvent instead of this
      */
     markWebhookForwarded: async (transactionId, businessShortcode) => {
         try {
@@ -507,7 +507,8 @@ export const db = {
             
             if (error) throw error;
             
-            await this.logTransactionEvent(
+            // ✅ FIXED: Use db.logTransactionEvent instead of this.logTransactionEvent
+            await db.logTransactionEvent(
                 transactionId,
                 businessShortcode,
                 'CLIENT_WEBHOOK_FORWARDED',
