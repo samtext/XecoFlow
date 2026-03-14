@@ -1,11 +1,12 @@
 import { supabase, supabaseAdmin } from './supabase.js';
 import { DB_MAPPING } from './systemRules.js'; 
+import axios from 'axios';
 import crypto from 'crypto';
+import BusinessAccount from '../models/businessAccount.model.js'; // Import the model
 
 /**
  * BIG-SYSTEM-V1.2 | DATABASE MANAGER
- * INFRASTRUCTURE LAYER ONLY - No business logic
- * Provides low-level database access and utilities
+ * REFACTORED: Now uses BusinessAccount model for all business operations
  */
 export const db = {
     /**
@@ -220,13 +221,14 @@ export const db = {
             
             if (error) throw error;
             
+            // Log access for audit trail
             if (data) {
                 await db.logTransactionEvent(
                     transactionId,
                     businessShortcode || data.business_shortcode,
                     'TRANSACTION_ACCESSED',
                     { accessed_at: new Date().toISOString() }
-                ).catch(() => {});
+                ).catch(() => {}); // Non-blocking
             }
             
             return { success: true, data };
@@ -462,85 +464,227 @@ export const db = {
         }
     },
 
+    // =========================================================
+    // 🔐 SECURITY METHODS (Now use BusinessAccount model)
+    // =========================================================
+
     /**
-     * ✅ RECORD M-PESA CALLBACK - Pure database operation
-     * Returns the updated transaction data
+     * ✅ DELEGATED: Now uses BusinessAccount model
      */
-    recordMpesaCallback: async (transactionId, businessShortcode, callbackData) => {
+    getBusinessByApiKey: async (apiKey) => {
+        return BusinessAccount.findByApiKey(apiKey);
+    },
+
+    /**
+     * ✅ DELEGATED: Now uses BusinessAccount model
+     */
+    registerBusiness: async (businessData) => {
+        return BusinessAccount.create(businessData);
+    },
+
+    /**
+     * ✅ DELEGATED: Now uses BusinessAccount model
+     */
+    getBusinessCallback: async (businessShortcode) => {
+        const { success, data } = await BusinessAccount.findByShortcode(businessShortcode);
+        if (!success || !data) {
+            return { success: false, error: 'Business not found' };
+        }
+        return { success: true, data: data.getWebhookConfig() };
+    },
+
+    /**
+     * ✅ DELEGATED: Now uses BusinessAccount model
+     */
+    checkRateLimit: async (businessShortcode) => {
+        return BusinessAccount.checkRateLimit(businessShortcode);
+    },
+
+    /**
+     * ✅ DELEGATED: Now uses BusinessAccount model
+     */
+    getAllActiveBusinesses: async () => {
+        return BusinessAccount.getAllActive();
+    },
+
+    // =========================================================
+    // 🌐 WEBHOOK FORWARDER SERVICE
+    // =========================================================
+
+    /**
+     * Queue webhook for async delivery
+     */
+    queueWebhookForDelivery: (transactionId, businessShortcode, mpesaData) => {
+        setImmediate(async () => {
+            try {
+                await db.forwardWebhook(transactionId, businessShortcode, mpesaData);
+            } catch (error) {
+                console.error(`❌ Queued webhook failed for ${transactionId}:`, error.message);
+            }
+        });
+        return { queued: true };
+    },
+
+    /**
+     * Forward webhook to business
+     */
+    forwardWebhook: async (transactionId, businessShortcode, mpesaData) => {
+        console.log(`🔄 Forwarding webhook for transaction ${transactionId} to business ${businessShortcode}`);
+        
         try {
+            const { data: config } = await db.getBusinessCallback(businessShortcode);
+            if (!config?.webhook_url) {
+                console.error(`❌ Webhook failed: No URL configured for business ${businessShortcode}`);
+                return { success: false };
+            }
+
+            const payload = {
+                transaction_id: transactionId,
+                status: mpesaData.ResultCode === 0 ? 'SUCCESS' : 'FAILED',
+                mpesa_receipt: mpesaData.TransID || null,
+                message: mpesaData.ResultDesc,
+                amount: mpesaData.TransAmount,
+                phone: mpesaData.MSISDN,
+                timestamp: new Date().toISOString(),
+                raw_mpesa: mpesaData
+            };
+
+            const headers = {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Xeco-Gateway-Forwarder/1.2',
+                'X-Forwarded-By': 'Xeco-Gateway'
+            };
+
+            if (config.webhook_secret) {
+                const signature = BusinessAccount.generateWebhookSignature(
+                    payload, 
+                    config.webhook_secret
+                );
+                headers['X-Webhook-Signature'] = signature;
+                headers['X-Webhook-Signature-Version'] = 'v1';
+            }
+
+            if (config.callback_headers) {
+                Object.assign(headers, config.callback_headers);
+            }
+
             await db.logTransactionEvent(
                 transactionId,
                 businessShortcode,
-                'MPESA_CALLBACK_RECEIVED',
-                { callback: callbackData }
+                'WEBHOOK_ATTEMPT_STARTED',
+                { attempt: 1, url: config.webhook_url }
             );
-            
-            const newStatus = callbackData.ResultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
 
-            const { data, error } = await supabaseAdmin
-                .from('airtime_transactions')
-                .update({
-                    status: newStatus,
-                    mpesa_receipt: callbackData.TransID,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('transaction_id', transactionId)
-                .eq('business_shortcode', businessShortcode)
-                .select()
-                .single();
-            
-            if (error) throw error;
-            
-            return { 
-                success: true, 
-                data,
-                shouldForwardWebhook: callbackData.ResultCode === 0 // Only forward successful payments
-            };
+            const response = await axios.post(config.webhook_url, payload, {
+                headers,
+                timeout: 10000,
+                maxRedirects: 0,
+                validateStatus: null
+            });
+
+            const success = response.status >= 200 && response.status < 300;
+
+            if (success) {
+                console.log(`✅ Webhook successfully forwarded for ${transactionId}`);
+                await db.logTransactionEvent(
+                    transactionId,
+                    businessShortcode,
+                    'WEBHOOK_SUCCESS',
+                    { status: response.status }
+                );
+            }
+
+            return { success };
         } catch (error) {
-            console.error("❌ DB_ERROR: Failed to record M-PESA callback:", error.message);
+            console.error(`⚠️ Webhook forwarding error for ${transactionId}:`, error.message);
             return { success: false, error: error.message };
         }
     },
 
     /**
-     * ✅ Get pending webhooks (No N+1 query)
+     * Retry failed webhooks (uses BusinessAccount model)
+     */
+    retryFailedWebhooks: async (maxAttempts = 3) => {
+        console.log("🔄 Starting webhook retry process...");
+        
+        try {
+            const pending = await db.getPendingWebhooks();
+            
+            if (!pending.success || !pending.data.length) {
+                console.log("📭 No pending webhooks to retry");
+                return { success: true, count: 0 };
+            }
+
+            const transactionIds = pending.data.map(tx => tx.transaction_id);
+            
+            const { data: transactions } = await supabaseAdmin
+                .from('airtime_transactions')
+                .select('*')
+                .in('transaction_id', transactionIds);
+            
+            const txMap = new Map(transactions.map(t => [t.transaction_id, t]));
+
+            let retried = 0;
+
+            for (const tx of pending.data) {
+                const fullTx = txMap.get(tx.transaction_id);
+                if (!fullTx) continue;
+
+                const result = await db.forwardWebhook(
+                    tx.transaction_id,
+                    tx.business_shortcode,
+                    fullTx
+                );
+
+                if (result.success) retried++;
+                
+                await new Promise(r => setTimeout(r, 500));
+            }
+
+            return { success: true, retried, total: pending.data.length };
+        } catch (error) {
+            console.error("❌ Failed to retry webhooks:", error.message);
+            return { success: false, error: error.message };
+        }
+    },
+
+    /**
+     * Get pending webhooks
      */
     getPendingWebhooks: async (maxAgeMinutes = 60) => {
         try {
             const cutoffTime = new Date(Date.now() - maxAgeMinutes * 60000).toISOString();
             
-            const { data: transactions, error } = await supabaseAdmin
+            const { data, error } = await supabaseAdmin
                 .from('airtime_transactions')
-                .select('transaction_id, business_shortcode')
+                .select(`
+                    transaction_id,
+                    business_shortcode
+                `)
                 .eq('request_type', 'EXTERNAL')
                 .eq('status', 'PAYMENT_SUCCESS')
                 .eq('webhook_forwarded', false)
                 .gte('created_at', cutoffTime);
             
             if (error) throw error;
-            if (!transactions.length) return { success: true, data: [] };
-
-            const transactionIds = transactions.map(t => t.transaction_id);
-
-            const { data: attempts } = await supabaseAdmin
-                .from('webhook_attempts')
-                .select('transaction_id, success, attempt_number')
-                .in('transaction_id', transactionIds)
-                .order('attempt_number', { ascending: false });
-
-            const attemptMap = {};
-            attempts?.forEach(a => {
-                if (!attemptMap[a.transaction_id] || 
-                    a.attempt_number > attemptMap[a.transaction_id].attempt_number) {
-                    attemptMap[a.transaction_id] = a;
+            
+            const pending = [];
+            
+            for (const tx of data) {
+                const { data: attempts } = await supabaseAdmin
+                    .from('webhook_attempts')
+                    .select('attempt_number, success')
+                    .eq('transaction_id', tx.transaction_id)
+                    .order('attempt_number', { ascending: false })
+                    .limit(1);
+                
+                const lastAttempt = attempts && attempts[0];
+                
+                if (!lastAttempt || !lastAttempt.success) {
+                    pending.push(tx);
                 }
-            });
-
-            const pending = transactions.filter(tx => {
-                const lastAttempt = attemptMap[tx.transaction_id];
-                return !lastAttempt || !lastAttempt.success;
-            });
-
+            }
+            
             return { success: true, data: pending };
         } catch (error) {
             console.error("❌ DB_ERROR: Failed to get pending webhooks:", error.message);
@@ -549,7 +693,7 @@ export const db = {
     },
 
     /**
-     * ✅ Mark webhook as forwarded
+     * Mark webhook as forwarded
      */
     markWebhookForwarded: async (transactionId, businessShortcode) => {
         try {
@@ -579,7 +723,7 @@ export const db = {
     },
 
     /**
-     * ✅ Create external transaction
+     * Create external transaction
      */
     createExternalTransaction: async (businessShortcode, transactionData) => {
         try {
@@ -615,7 +759,40 @@ export const db = {
     },
 
     /**
-     * ✅ Health check
+     * Record M-PESA callback
+     */
+    recordMpesaCallback: async (transactionId, businessShortcode, callbackData) => {
+        try {
+            await db.logTransactionEvent(
+                transactionId,
+                businessShortcode,
+                'MPESA_CALLBACK_RECEIVED',
+                { callback: callbackData }
+            );
+            
+            const { error } = await supabaseAdmin
+                .from('airtime_transactions')
+                .update({
+                    status: callbackData.ResultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED',
+                    mpesa_receipt: callbackData.TransID,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('transaction_id', transactionId)
+                .eq('business_shortcode', businessShortcode);
+            
+            if (error) throw error;
+            
+            db.queueWebhookForDelivery(transactionId, businessShortcode, callbackData);
+            
+            return { success: true };
+        } catch (error) {
+            console.error("❌ DB_ERROR: Failed to record M-PESA callback:", error.message);
+            return { success: false, error: error.message };
+        }
+    },
+
+    /**
+     * Health check
      */
     getDetailedHealth: async () => {
         try {
@@ -623,6 +800,7 @@ export const db = {
                 timestamp: new Date().toISOString(),
                 services: {},
                 transactions: {},
+                businesses: {},
                 webhooks: {}
             };
             
@@ -636,6 +814,9 @@ export const db = {
             
             if (counts) results.transactions.stuck = counts;
             
+            const { data: activeBusinesses } = await BusinessAccount.getAllActive();
+            results.businesses.active = activeBusinesses?.length || 0;
+            
             const pendingWebhooks = await db.getPendingWebhooks(1440);
             results.webhooks.pending = pendingWebhooks.data?.length || 0;
             
@@ -647,19 +828,13 @@ export const db = {
     },
 
     // =========================================================
-    // 🔐 Encryption Utilities
+    // 🔐 Encryption (Keep as is - these are utility functions)
     // =========================================================
 
-    hashString: (input) => {
-        return crypto
-            .createHash('sha256')
-            .update(input)
-            .digest('hex');
-    },
-
-    generateSecureToken: () => {
-        return crypto.randomBytes(32).toString('hex');
-    },
+    hashApiKey: BusinessAccount.hashApiKey,
+    generateApiKey: BusinessAccount.generateApiKey,
+    generateWebhookSignature: BusinessAccount.generateWebhookSignature,
+    verifyWebhookSignature: BusinessAccount.verifyWebhookSignature,
 
     encryptSensitiveData: async (data) => {
         try {
@@ -723,7 +898,9 @@ export const db = {
 
 // Log operational status
 console.log("🚀 XECO-ENGINE: Database Abstraction Layer Operational");
-console.log("🏦 Multi-Till Support: Enabled");
-console.log("📊 Audit Trail: Enabled");
+console.log("🏦 Multi-Till Support: Enabled - Business isolation active");
+console.log("📊 Audit Trail: Enabled - All transactions are logged");
 console.log("🔄 Retry Logic: Exponential backoff configured");
-console.log("🔐 Security: AES-256 encryption active");
+console.log("🌐 Gateway Mode: Ready - Multi-tenant support active");
+console.log("📡 Webhook Forwarder: Active - Async delivery enabled");
+console.log("🔐 Security: API key hashing & AES-256 encryption active");
