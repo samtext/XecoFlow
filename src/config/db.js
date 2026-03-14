@@ -2,6 +2,8 @@ import { supabase, supabaseAdmin } from './supabase.js';
 import { DB_MAPPING } from './systemRules.js'; 
 import crypto from 'crypto';
 
+// ❌ REMOVED: import BusinessAccount from '../models/businessAccount.model.js';
+
 /**
  * BIG-SYSTEM-V1.2 | DATABASE MANAGER
  * INFRASTRUCTURE LAYER ONLY - No business logic
@@ -388,7 +390,7 @@ export const db = {
     },
 
     // =========================================================
-    // 🔐 HELPER FUNCTIONS (Pure infrastructure)
+    // 🔐 INFRASTRUCTURE HELPER FUNCTIONS
     // =========================================================
 
     /**
@@ -518,6 +520,118 @@ export const db = {
             return { success: false, error: error.message };
         }
     },
+
+    /**
+     * ✅ Create external transaction
+     */
+    createExternalTransaction: async (businessShortcode, transactionData) => {
+        try {
+            const transaction = {
+                ...transactionData,
+                business_shortcode: businessShortcode,
+                request_type: 'EXTERNAL',
+                status: 'INITIATED',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            };
+            
+            const { data, error } = await supabaseAdmin
+                .from('airtime_transactions')
+                .insert([transaction])
+                .select()
+                .single();
+            
+            if (error) throw error;
+            
+            await this.logTransactionEvent(
+                data.transaction_id,
+                businessShortcode,
+                'STK_INITIATED_BY_CLIENT',
+                { client_request: transactionData }
+            );
+            
+            return { success: true, data };
+        } catch (error) {
+            console.error("❌ DB_ERROR: Failed to create external transaction:", error.message);
+            return { success: false, error: error.message };
+        }
+    },
+
+    /**
+     * ✅ Record M-PESA callback
+     */
+    recordMpesaCallback: async (transactionId, businessShortcode, callbackData) => {
+        try {
+            await this.logTransactionEvent(
+                transactionId,
+                businessShortcode,
+                'MPESA_CALLBACK_RECEIVED',
+                { callback: callbackData }
+            );
+            
+            const newStatus = callbackData.ResultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
+
+            const { data, error } = await supabaseAdmin
+                .from('airtime_transactions')
+                .update({
+                    status: newStatus,
+                    mpesa_receipt: callbackData.TransID,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('transaction_id', transactionId)
+                .eq('business_shortcode', businessShortcode)
+                .select()
+                .single();
+            
+            if (error) throw error;
+            
+            return { 
+                success: true, 
+                data,
+                shouldForwardWebhook: callbackData.ResultCode === 0
+            };
+        } catch (error) {
+            console.error("❌ DB_ERROR: Failed to record M-PESA callback:", error.message);
+            return { success: false, error: error.message };
+        }
+    },
+
+    /**
+     * ✅ Health check
+     */
+    getDetailedHealth: async () => {
+        try {
+            const results = {
+                timestamp: new Date().toISOString(),
+                services: {},
+                transactions: {},
+                webhooks: {},
+                critical_failures: {}
+            };
+            
+            const dbHealth = await this.checkConnection();
+            results.services.database = dbHealth;
+            
+            const { data: counts } = await supabaseAdmin
+                .from('airtime_transactions')
+                .select('status, count')
+                .in('status', ['PENDING_PAYMENT', 'PROCESSING', 'HEALING', 'FAILED']);
+            
+            if (counts) results.transactions.stuck = counts;
+            
+            const pendingWebhooks = await this.getPendingWebhooks(1440);
+            results.webhooks.pending = pendingWebhooks.data?.length || 0;
+            
+            return { success: true, data: results };
+        } catch (error) {
+            console.error("❌ DB_ERROR: Failed to get detailed health:", error.message);
+            return { success: false, error: error.message };
+        }
+    },
+
+    // =========================================================
+    // 🔐 Security & Encryption Utilities
+    // =========================================================
 
     /**
      * ✅ Constant-time string comparison
