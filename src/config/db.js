@@ -4,8 +4,7 @@ import crypto from 'crypto';
 
 /**
  * BIG-SYSTEM-V1.2 | DATABASE MANAGER
- * INFRASTRUCTURE LAYER ONLY - No business logic
- * Provides low-level database access and utilities
+ * INFRASTRUCTURE LAYER - Complete with all helper functions
  */
 export const db = {
     /**
@@ -83,7 +82,6 @@ export const db = {
                 query = query.eq('business_shortcode', businessShortcode);
             }
             
-            // Time range filter
             const now = new Date();
             if (timeRange === 'day') {
                 const today = new Date(now.setHours(0, 0, 0, 0));
@@ -103,7 +101,6 @@ export const db = {
             
             if (error) throw error;
             
-            // Group by business_shortcode if no specific till
             if (!businessShortcode && data) {
                 const grouped = {};
                 data.forEach(row => {
@@ -127,7 +124,6 @@ export const db = {
                     grouped[code].total_amount += amount;
                     grouped[code].transaction_count++;
                     
-                    // Track by request type
                     if (!grouped[code].by_request_type[requestType]) {
                         grouped[code].by_request_type[requestType] = {
                             count: 0,
@@ -137,7 +133,6 @@ export const db = {
                     grouped[code].by_request_type[requestType].count++;
                     grouped[code].by_request_type[requestType].amount += amount;
                     
-                    // Status breakdown
                     if (row.status === 'COMPLETED' || row.status === 'PAYMENT_SUCCESS') {
                         grouped[code].successful_count++;
                         grouped[code].successful_amount += amount;
@@ -273,7 +268,6 @@ export const db = {
                 
                 summary.total_amount += amount;
                 
-                // Track by request type
                 if (!summary.by_request_type[requestType]) {
                     summary.by_request_type[requestType] = {
                         count: 0,
@@ -283,7 +277,6 @@ export const db = {
                 summary.by_request_type[requestType].count++;
                 summary.by_request_type[requestType].amount += amount;
                 
-                // Status breakdown
                 if (t.status === 'COMPLETED' || t.status === 'PAYMENT_SUCCESS') {
                     summary.successful_count++;
                     summary.successful_amount += amount;
@@ -295,7 +288,6 @@ export const db = {
                     summary.pending_amount += amount;
                 }
                 
-                // Time-based breakdown
                 const txDate = new Date(t.created_at).toISOString().split('T')[0];
                 if (txDate === today) {
                     summary.today_count++;
@@ -395,6 +387,111 @@ export const db = {
         }
     },
 
+    // =========================================================
+    // 🔐 NEW HELPER FUNCTIONS (Required by Controller)
+    // =========================================================
+
+    /**
+     * ✅ Log webhook attempt (Required by Controller)
+     */
+    logWebhookAttempt: async (transactionId, businessShortcode, attempt, success, response) => {
+        try {
+            const { error } = await supabaseAdmin
+                .from('webhook_attempts')
+                .insert([{
+                    transaction_id: transactionId,
+                    business_shortcode: businessShortcode,
+                    attempt_number: attempt,
+                    success: success,
+                    response_status: response?.status,
+                    response_body: typeof response?.data === 'object' ? response.data : { message: response?.data },
+                    attempted_at: new Date().toISOString()
+                }]);
+            
+            if (error) throw error;
+            return { success: true };
+        } catch (error) {
+            console.error("❌ DB_ERROR: Failed to log webhook attempt:", error.message);
+            return { success: false, error: error.message };
+        }
+    },
+
+    /**
+     * ✅ Log critical failure for manual intervention
+     */
+    logCriticalFailure: async (transactionId, businessShortcode, failureType, data) => {
+        try {
+            const { error } = await supabaseAdmin
+                .from('critical_failures')
+                .insert([{
+                    transaction_id: transactionId,
+                    business_shortcode: businessShortcode,
+                    failure_type: failureType,
+                    data: data,
+                    resolved: false,
+                    created_at: new Date().toISOString()
+                }]);
+            
+            if (error) throw error;
+            
+            // Also log to console with high visibility
+            console.error(`🚨 CRITICAL FAILURE [${failureType}]: Transaction ${transactionId} for business ${businessShortcode}`);
+            
+            return { success: true };
+        } catch (error) {
+            console.error("❌ CRITICAL: Failed to log critical failure:", error.message);
+            // Don't throw here, just log to console to avoid crashing the process
+            return { success: false, error: error.message };
+        }
+    },
+
+    /**
+     * ✅ Get unresolved critical failures (for admin dashboard)
+     */
+    getUnresolvedFailures: async (businessShortcode = null) => {
+        try {
+            let query = supabaseAdmin
+                .from('critical_failures')
+                .select('*')
+                .eq('resolved', false)
+                .order('created_at', { ascending: false });
+            
+            if (businessShortcode) {
+                query = query.eq('business_shortcode', businessShortcode);
+            }
+            
+            const { data, error } = await query;
+            
+            if (error) throw error;
+            return { success: true, data };
+        } catch (error) {
+            console.error("❌ DB_ERROR: Failed to get unresolved failures:", error.message);
+            return { success: false, error: error.message };
+        }
+    },
+
+    /**
+     * ✅ Resolve a critical failure (mark as handled)
+     */
+    resolveCriticalFailure: async (failureId, resolvedBy) => {
+        try {
+            const { error } = await supabaseAdmin
+                .from('critical_failures')
+                .update({
+                    resolved: true,
+                    resolved_at: new Date().toISOString(),
+                    resolved_by: resolvedBy
+                })
+                .eq('id', failureId);
+            
+            if (error) throw error;
+            return { success: true };
+        } catch (error) {
+            console.error("❌ DB_ERROR: Failed to resolve critical failure:", error.message);
+            return { success: false, error: error.message };
+        }
+    },
+
     /**
      * ✅ Get all transactions that need healing
      */
@@ -421,89 +518,7 @@ export const db = {
     },
 
     /**
-     * ✅ Get transactions for reconciliation (daily check)
-     */
-    getTransactionsForReconciliation: async (date) => {
-        try {
-            const startDate = new Date(date);
-            startDate.setHours(0, 0, 0, 0);
-            
-            const endDate = new Date(date);
-            endDate.setHours(23, 59, 59, 999);
-            
-            const { data, error } = await supabaseAdmin
-                .from('airtime_transactions')
-                .select('*')
-                .gte('created_at', startDate.toISOString())
-                .lte('created_at', endDate.toISOString())
-                .in('status', ['PAYMENT_SUCCESS', 'COMPLETED']);
-            
-            if (error) throw error;
-            
-            const grouped = {};
-            data.forEach(tx => {
-                const code = tx.business_shortcode || 'unknown';
-                if (!grouped[code]) {
-                    grouped[code] = {
-                        total_amount: 0,
-                        count: 0,
-                        transactions: []
-                    };
-                }
-                grouped[code].total_amount += parseFloat(tx.amount) || 0;
-                grouped[code].count++;
-                grouped[code].transactions.push(tx.transaction_id);
-            });
-            
-            return { success: true, data: grouped };
-        } catch (error) {
-            console.error("❌ DB_ERROR: Failed to get reconciliation data:", error.message);
-            return { success: false, error: error.message };
-        }
-    },
-
-    /**
-     * ✅ RECORD M-PESA CALLBACK - Pure database operation
-     * Returns the updated transaction data
-     */
-    recordMpesaCallback: async (transactionId, businessShortcode, callbackData) => {
-        try {
-            await db.logTransactionEvent(
-                transactionId,
-                businessShortcode,
-                'MPESA_CALLBACK_RECEIVED',
-                { callback: callbackData }
-            );
-            
-            const newStatus = callbackData.ResultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
-
-            const { data, error } = await supabaseAdmin
-                .from('airtime_transactions')
-                .update({
-                    status: newStatus,
-                    mpesa_receipt: callbackData.TransID,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('transaction_id', transactionId)
-                .eq('business_shortcode', businessShortcode)
-                .select()
-                .single();
-            
-            if (error) throw error;
-            
-            return { 
-                success: true, 
-                data,
-                shouldForwardWebhook: callbackData.ResultCode === 0 // Only forward successful payments
-            };
-        } catch (error) {
-            console.error("❌ DB_ERROR: Failed to record M-PESA callback:", error.message);
-            return { success: false, error: error.message };
-        }
-    },
-
-    /**
-     * ✅ Get pending webhooks (No N+1 query)
+     * ✅ Get pending webhooks for retry
      */
     getPendingWebhooks: async (maxAgeMinutes = 60) => {
         try {
@@ -615,7 +630,46 @@ export const db = {
     },
 
     /**
-     * ✅ Health check
+     * ✅ Record M-PESA callback
+     */
+    recordMpesaCallback: async (transactionId, businessShortcode, callbackData) => {
+        try {
+            await db.logTransactionEvent(
+                transactionId,
+                businessShortcode,
+                'MPESA_CALLBACK_RECEIVED',
+                { callback: callbackData }
+            );
+            
+            const newStatus = callbackData.ResultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
+
+            const { data, error } = await supabaseAdmin
+                .from('airtime_transactions')
+                .update({
+                    status: newStatus,
+                    mpesa_receipt: callbackData.TransID,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('transaction_id', transactionId)
+                .eq('business_shortcode', businessShortcode)
+                .select()
+                .single();
+            
+            if (error) throw error;
+            
+            return { 
+                success: true, 
+                data,
+                shouldForwardWebhook: callbackData.ResultCode === 0
+            };
+        } catch (error) {
+            console.error("❌ DB_ERROR: Failed to record M-PESA callback:", error.message);
+            return { success: false, error: error.message };
+        }
+    },
+
+    /**
+     * ✅ Health check with detailed diagnostics
      */
     getDetailedHealth: async () => {
         try {
@@ -623,7 +677,8 @@ export const db = {
                 timestamp: new Date().toISOString(),
                 services: {},
                 transactions: {},
-                webhooks: {}
+                webhooks: {},
+                critical_failures: {}
             };
             
             const dbHealth = await db.checkConnection();
@@ -639,6 +694,10 @@ export const db = {
             const pendingWebhooks = await db.getPendingWebhooks(1440);
             results.webhooks.pending = pendingWebhooks.data?.length || 0;
             
+            const unresolvedFailures = await db.getUnresolvedFailures();
+            results.critical_failures.unresolved = unresolvedFailures.data?.length || 0;
+            results.critical_failures.list = unresolvedFailures.data || [];
+            
             return { success: true, data: results };
         } catch (error) {
             console.error("❌ DB_ERROR: Failed to get detailed health:", error.message);
@@ -647,8 +706,24 @@ export const db = {
     },
 
     // =========================================================
-    // 🔐 Encryption Utilities
+    // 🔐 Security & Encryption Utilities
     // =========================================================
+
+    /**
+     * ✅ Constant-time string comparison (prevents timing attacks)
+     */
+    safeCompare: (a, b) => {
+        try {
+            if (!a || !b) return false;
+            return crypto.timingSafeEqual(
+                Buffer.from(a, 'utf8'),
+                Buffer.from(b, 'utf8')
+            );
+        } catch (error) {
+            console.error("❌ Safe compare error:", error.message);
+            return false;
+        }
+    },
 
     hashString: (input) => {
         return crypto
@@ -726,4 +801,6 @@ console.log("🚀 XECO-ENGINE: Database Abstraction Layer Operational");
 console.log("🏦 Multi-Till Support: Enabled");
 console.log("📊 Audit Trail: Enabled");
 console.log("🔄 Retry Logic: Exponential backoff configured");
-console.log("🔐 Security: AES-256 encryption active");
+console.log("📡 Webhook Logging: Enabled");
+console.log("🚨 Critical Failure Tracking: Active");
+console.log("🔐 Security: AES-256 encryption, constant-time comparison");

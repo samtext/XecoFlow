@@ -1,5 +1,6 @@
 import Joi from 'joi';
 import { randomUUID } from 'crypto';
+import axios from 'axios'; // ✅ ADDED: For Node.js compatibility
 import stkService from '../services/stk.service.js';
 import c2bService from '../services/c2b.service.js';
 import reversalService from '../services/reversal.service.js';
@@ -28,15 +29,15 @@ const normalizePhone = (phone) => {
     
     if (cleaned.startsWith('0')) {
         cleaned = '254' + cleaned.substring(1);
-    } else if (cleaned.startsWith('7')) {
+    } else if (cleaned.startsWith('7') || cleaned.startsWith('1')) { // ✅ FIXED: Added '1' for new prefixes
         cleaned = '254' + cleaned;
-    } else if (cleaned.startsWith('2547')) {
+    } else if (cleaned.startsWith('2547') || cleaned.startsWith('2541')) {
         return cleaned;
     } else if (cleaned.startsWith('+254')) {
         cleaned = cleaned.substring(1);
     }
     
-    if (cleaned.length === 12 && cleaned.startsWith('254')) {
+    if (cleaned.length === 12 && (cleaned.startsWith('2547') || cleaned.startsWith('2541'))) {
         return cleaned;
     }
     
@@ -44,7 +45,7 @@ const normalizePhone = (phone) => {
 };
 
 // ============================================
-// 💰 AMOUNT VALIDATION HELPER (FIX 1: Changed error code)
+// 💰 AMOUNT VALIDATION HELPER
 // ============================================
 const validateAmount = (amount, transactionId = 'unknown') => {
     const parsedAmount = parseFloat(amount);
@@ -52,7 +53,7 @@ const validateAmount = (amount, transactionId = 'unknown') => {
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
         return {
             valid: false,
-            code: "C2B00016", // Invalid amount format
+            code: "C2B00016",
             message: "Invalid amount format",
             amount: 0
         };
@@ -67,7 +68,7 @@ const validateAmount = (amount, transactionId = 'unknown') => {
         
         return {
             valid: false,
-            code: "C2B00012", // 🔥 FIX 1: Changed from C2B00016 to C2B00012 (Invalid/Below Minimum Amount)
+            code: "C2B00012",
             message: transactionRules.messages.belowMinimum(transactionRules.minAmount),
             amount: parsedAmount
         };
@@ -84,7 +85,6 @@ const validateAmount = (amount, transactionId = 'unknown') => {
         };
     }
     
-    // Optional: Check business hours
     if (process.env.CHECK_BUSINESS_HOURS === 'true') {
         const hour = new Date().getHours();
         const { start, end } = transactionRules.businessHours;
@@ -107,7 +107,7 @@ const validateAmount = (amount, transactionId = 'unknown') => {
 };
 
 // ============================================
-// ✅ VALIDATION SCHEMAS (FULLY FIXED)
+// ✅ VALIDATION SCHEMAS
 // ============================================
 const stkSchema = Joi.object({
     Body: Joi.object({
@@ -128,9 +128,7 @@ const stkSchema = Joi.object({
     }).required()
 });
 
-// ✅ COMPLETELY FIXED - ALL optional fields now allow empty strings
 const c2bSchema = Joi.object({
-    // Optional fields that can be empty - ALL FIXED
     TransactionType: Joi.string().optional().allow('').default('N/A'),
     TransTime: Joi.string().optional().allow('').default('N/A'),
     BusinessShortCode: Joi.string().optional().allow('').default('N/A'),
@@ -142,7 +140,6 @@ const c2bSchema = Joi.object({
     MiddleName: Joi.string().optional().allow('').default('N/A'),
     LastName: Joi.string().optional().allow('').default('N/A'),
     
-    // Required fields
     TransID: Joi.string().required(),
     TransAmount: Joi.string().required(),
     MSISDN: Joi.string().required()
@@ -187,30 +184,24 @@ export const handleMpesaCallback = async (req, res) => {
             console.log(`   IP: ${ipAddress}`);
             console.log(`   Content-Type: ${req.headers['content-type']}`);
             
-            // 3. Validate input
             const { error, value } = stkSchema.validate(req.body);
             
             if (error) {
                 console.error(`❌ [${requestId}] STK Validation failed:`, error.message);
-                
                 await auditService.logError('stk_validation_error', {
                     requestId,
                     error: error.message,
                     receivedBody: req.body,
-                    headers: req.headers,
-                    ip: ipAddress,
-                    timestamp: new Date().toISOString()
+                    ip: ipAddress
                 });
                 return;
             }
             
             const callbackData = value.Body.stkCallback;
-            const { CheckoutRequestID, MerchantRequestID, ResultCode, ResultDesc } = callbackData;
+            const { CheckoutRequestID, ResultCode } = callbackData;
             
-            console.log(`📦 [${requestId}] Transaction: ${CheckoutRequestID}`);
-            console.log(`   Status: ${ResultCode} - ${ResultDesc}`);
+            console.log(`📦 [${requestId}] Transaction: ${CheckoutRequestID} | Status: ${ResultCode}`);
             
-            // 4. Check idempotency
             const existing = await c2bService.checkTransaction({
                 id: CheckoutRequestID,
                 type: 'STK'
@@ -226,52 +217,26 @@ export const handleMpesaCallback = async (req, res) => {
                 return;
             }
             
-            // 5. Extract metadata for successful transactions
             let metadata = {};
             if (ResultCode === 0) {
                 metadata = extractStkMetadata(callbackData);
-                console.log(`📱 [${requestId}] Customer: ${metadata.phone || 'Unknown'}`);
-                console.log(`💰 Amount: KES ${metadata.amount || 'Unknown'}`);
-                console.log(`🧾 Receipt: ${metadata.receiptNumber || 'N/A'}`);
                 
-                // 6. Validate amount for successful transactions
                 if (metadata.amount) {
                     const amountValidation = validateAmount(metadata.amount, CheckoutRequestID);
-                    
-                    if (!amountValidation.valid) {
-                        console.warn(`⚠️ [${requestId}] Amount validation failed:`, amountValidation.message);
-                        
-                        await auditService.logInfo('stk_amount_rejected', {
-                            requestId,
-                            transactionId: CheckoutRequestID,
-                            amount: metadata.amount,
-                            reason: amountValidation.message
-                        });
-                        
-                        // Still save but mark as rejected
-                        metadata.amountValid = false;
-                        metadata.rejectionReason = amountValidation.message;
-                    } else {
-                        metadata.amountValid = true;
-                        metadata.profitAnalysis = amountValidation.profitAnalysis;
-                        console.log(`📊 Profit: ${amountValidation.profitAnalysis.netProfit > 0 ? '✅' : '⚠️'}`);
-                    }
+                    metadata.amountValid = amountValidation.valid;
+                    metadata.profitAnalysis = amountValidation.profitAnalysis;
                 }
             }
             
-            // 7. Prepare data for service
             const stkData = {
                 checkoutRequestId: CheckoutRequestID,
-                merchantRequestId: MerchantRequestID,
-                resultCode: ResultCode,
-                resultDesc: ResultDesc,
+                ...callbackData,
                 ...metadata,
                 requestId,
                 rawPayload: req.body,
                 ipAddress
             };
             
-            // 8. Delegate to service
             await stkService.handleStkResult(stkData);
             
             const duration = Date.now() - startTime;
@@ -279,24 +244,18 @@ export const handleMpesaCallback = async (req, res) => {
             
         } catch (error) {
             console.error(`❌ [${requestId}] STK Fatal error:`, error.message);
-            
             await auditService.logError('stk_fatal_error', {
                 requestId,
                 error: error.message,
-                stack: error.stack,
-                headers: req.headers,
                 body: req.body,
-                ip: getClientIp(req),
-                url: req.url,
-                method: req.method,
-                timestamp: new Date().toISOString()
+                ip: getClientIp(req)
             });
         }
     });
 };
 
 // ============================================
-// 🛡️ LANE 2: C2B VALIDATION (FIX 2 & 3 applied)
+// 🛡️ LANE 2: C2B VALIDATION
 // ============================================
 export const handleC2BValidation = async (req, res) => {
     const requestId = randomUUID();
@@ -307,10 +266,7 @@ export const handleC2BValidation = async (req, res) => {
         console.log(`\n🔍 [${requestId}] C2B VALIDATION RECEIVED`);
         console.log(`   IP: ${ipAddress}`);
         
-        // Measure response time to ensure we're fast enough
         const startTime = Date.now();
-        
-        // 1. AMOUNT VALIDATION FIRST (KES 10 minimum)
         const amountValidation = validateAmount(req.body.TransAmount, req.body.TransID);
         
         if (!amountValidation.valid) {
@@ -326,24 +282,20 @@ export const handleC2BValidation = async (req, res) => {
             const responseTime = Date.now() - startTime;
             console.log(`⏱️ [${requestId}] Validation response time: ${responseTime}ms`);
             
-            // 🔥 FIX 2: Using C2B00012 for stronger rejection signal
             return res.status(200).json({ 
-                ResultCode: amountValidation.code, // Now returns C2B00012 for low amounts
+                ResultCode: amountValidation.code,
                 ResultDesc: amountValidation.message
             });
         }
         
-        // 2. Validate input schema (ALL optional fields now allow empty)
         const { error, value } = c2bSchema.validate(req.body);
         
         if (error) {
             console.warn(`⚠️ [${requestId}] Schema validation failed:`, error.message);
-            
             await auditService.logError('c2b_validation_schema_error', {
                 requestId,
                 error: error.message,
                 receivedBody: req.body,
-                headers: req.headers,
                 ip: ipAddress
             });
             
@@ -353,11 +305,6 @@ export const handleC2BValidation = async (req, res) => {
             });
         }
         
-        console.log(`💰 Amount: KES ${amountValidation.amount} (Valid)`);
-        console.log(`📊 Profit: ${amountValidation.profitAnalysis.netProfit > 0 ? '✅ Profitable' : '⚠️ Low margin'}`);
-        console.log(`📱 From: ${maskPhone(value.MSISDN)}`);
-        
-        // 3. Delegate to service with validated amount
         await c2bService.handleValidation({
             ...value,
             amount: amountValidation.amount,
@@ -372,28 +319,18 @@ export const handleC2BValidation = async (req, res) => {
         
         return res.status(200).json({ 
             ResultCode: 0, 
-            ResultDesc: "Accepted",
-            info: {
-                amount: amountValidation.amount,
-                minAmount: transactionRules.minAmount,
-                profitable: amountValidation.profitAnalysis.netProfit > 0
-            }
+            ResultDesc: "Accepted"
         });
         
     } catch (error) {
         console.error(`❌ [${requestId}] Validation error:`, error.message);
-        
         await auditService.logError('c2b_validation_fatal', {
             requestId,
             error: error.message,
-            stack: error.stack,
-            headers: req.headers,
             body: req.body,
             ip: getClientIp(req)
         });
         
-        // 🔥 FIX 3: In case of error, REJECT rather than accept
-        // In fintech, it's safer to reject if the server is confused
         return res.status(200).json({ 
             ResultCode: 1, 
             ResultDesc: "Rejected due to internal error" 
@@ -402,25 +339,27 @@ export const handleC2BValidation = async (req, res) => {
 };
 
 // ============================================
-// 💰 LANE 3: C2B CONFIRMATION WITH AUTO-REVERSAL (RESTORED)
+// 💰 LANE 3: C2B CONFIRMATION (OPTIMIZED)
 // ============================================
 export const handleC2BConfirmation = async (req, res) => {
     const requestId = randomUUID();
-    const startTime = Date.now();
     
-    // 1. IMMEDIATE ACK
+    // 1. IMMEDIATE ACK - Before any processing!
     res.status(200).json({ ResultCode: 0, ResultDesc: "Success" });
     
-    // 2. Process in background
+    // 2. Process everything in background
     setImmediate(async () => {
+        const startTime = Date.now();
+        const businessShortcode = req.body.BusinessShortCode;
+        
         try {
             const ipAddress = getClientIp(req);
             
             console.log(`\n💰 [${requestId}] C2B CONFIRMATION RECEIVED`);
             console.log(`   IP: ${ipAddress}`);
-            console.log(`   Content-Type: ${req.headers['content-type']}`);
+            console.log(`   Business: ${businessShortcode}`);
+            console.log(`   Transaction: ${req.body.TransID}`);
             
-            // 3. AMOUNT VALIDATION FIRST (KES 10 minimum)
             const amountValidation = validateAmount(req.body.TransAmount, req.body.TransID);
             
             if (!amountValidation.valid) {
@@ -434,78 +373,53 @@ export const handleC2BConfirmation = async (req, res) => {
                     ip: ipAddress
                 });
                 
-                // ============================================
-                // 🚀 AUTO-REVERSAL FOR BELOW MINIMUM AMOUNTS (RESTORED)
-                // ============================================
-                try {
-                    console.log(`🔄 [${requestId}] INITIATING AUTO-REVERSAL for ${req.body.TransID}`);
-                    
-                    const reversalResult = await reversalService.initiateReversal(
-                        req.body.TransID,
-                        amountValidation.amount,
-                        'Below minimum transaction amount',
-                        req.body
-                    );
-                    
-                    if (reversalResult.success) {
-                        console.log(`✅ [${requestId}] Reversal initiated successfully`);
-                        await auditService.logInfo('reversal_initiated', {
-                            requestId,
-                            transactionId: req.body.TransID,
-                            amount: amountValidation.amount,
-                            conversationId: reversalResult.data?.ConversationID
-                        });
-                    } else {
-                        console.error(`❌ [${requestId}] Reversal initiation failed:`, reversalResult.error);
-                        await auditService.logError('reversal_failed', {
-                            requestId,
-                            transactionId: req.body.TransID,
-                            amount: amountValidation.amount,
-                            error: reversalResult.error
-                        });
+                // Auto-reversal for below minimum (only if amount >= 10)
+                // Skip reversal for very small amounts to avoid negative ROI
+                if (amountValidation.amount >= 10) {
+                    try {
+                        console.log(`🔄 [${requestId}] INITIATING AUTO-REVERSAL for ${req.body.TransID}`);
+                        
+                        const reversalResult = await reversalService.initiateReversal(
+                            req.body.TransID,
+                            amountValidation.amount,
+                            'Below minimum transaction amount',
+                            req.body
+                        );
+                        
+                        if (reversalResult.success) {
+                            console.log(`✅ [${requestId}] Reversal initiated successfully`);
+                            await auditService.logInfo('reversal_initiated', {
+                                requestId,
+                                transactionId: req.body.TransID,
+                                amount: amountValidation.amount
+                            });
+                        } else {
+                            console.error(`❌ [${requestId}] Reversal initiation failed:`, reversalResult.error);
+                            // This will be logged to critical_failures table via service layer
+                        }
+                    } catch (reversalError) {
+                        console.error(`❌ [${requestId}] Reversal error:`, reversalError.message);
                     }
-                } catch (reversalError) {
-                    console.error(`❌ [${requestId}] Reversal error:`, reversalError.message);
-                    await auditService.logError('reversal_exception', {
-                        requestId,
-                        transactionId: req.body.TransID,
-                        amount: amountValidation.amount,
-                        error: reversalError.message
-                    });
+                } else {
+                    console.log(`ℹ️ [${requestId}] Amount below reversal threshold - manual refund required`);
                 }
-                
-                return; // Don't process further
-            }
-            
-            // 4. Validate input schema (ALL optional fields now allow empty)
-            const { error, value } = c2bSchema.validate(req.body);
-            
-            if (error) {
-                console.error(`❌ [${requestId}] Schema validation failed:`, error.message);
-                
-                await auditService.logError('c2b_confirmation_schema_error', {
-                    requestId,
-                    error: error.message,
-                    receivedBody: req.body,
-                    receivedBodyKeys: req.body ? Object.keys(req.body) : [],
-                    headers: req.headers,
-                    ip: ipAddress,
-                    contentType: req.headers['content-type'],
-                    timestamp: new Date().toISOString()
-                });
                 
                 return;
             }
             
-            const amount = amountValidation.amount;
+            const { error, value } = c2bSchema.validate(req.body);
             
-            console.log(`   Transaction: ${value.TransID}`);
-            console.log(`   Amount: KES ${amount} (Validated)`);
-            console.log(`   From: ${maskPhone(value.MSISDN)}`);
-            console.log(`   Ref: ${value.BillRefNumber || 'N/A'}`);
-            console.log(`   Profit: KES ${amountValidation.profitAnalysis.netProfit.toFixed(2)}`);
+            if (error) {
+                console.error(`❌ [${requestId}] Schema validation failed:`, error.message);
+                await auditService.logError('c2b_confirmation_schema_error', {
+                    requestId,
+                    error: error.message,
+                    receivedBody: req.body,
+                    ip: ipAddress
+                });
+                return;
+            }
             
-            // 5. Check idempotency with type
             const existing = await c2bService.checkTransaction({
                 id: value.TransID,
                 type: 'C2B'
@@ -513,126 +427,79 @@ export const handleC2BConfirmation = async (req, res) => {
             
             if (existing) {
                 console.log(`🔄 [${requestId}] Duplicate transaction: ${value.TransID}`);
-                
                 await auditService.logInfo('c2b_confirmation_duplicate', {
                     requestId,
                     transactionId: value.TransID,
-                    amount,
-                    status: existing.status,
-                    originalTime: existing.created_at
+                    amount: amountValidation.amount
                 });
-                
                 return;
             }
             
-            // 6. Prepare sanitized data
             const sanitizedData = {
                 ...value,
-                TransAmount: amount,
+                TransAmount: amountValidation.amount,
                 normalizedPhone: normalizePhone(value.MSISDN),
+                business_shortcode: businessShortcode,
+                request_type: businessShortcode ? 'EXTERNAL' : 'INTERNAL',
                 profitAnalysis: amountValidation.profitAnalysis,
                 requestId,
                 ipAddress,
                 rawPayload: req.body,
-                processedAt: new Date().toISOString(),
-                meetsMinimum: true,
-                isProfitable: amountValidation.profitAnalysis.netProfit > 0
+                processedAt: new Date().toISOString()
             };
             
-            // 7. Delegate to service
             await c2bService.handleConfirmation(sanitizedData);
             
             const duration = Date.now() - startTime;
             console.log(`✅ [${requestId}] Confirmation processed in ${duration}ms`);
-            console.log(`   Transaction ${value.TransID} saved to database`);
             
-            // 8. Log success with profitability info
-            await auditService.logInfo('c2b_confirmation_success', {
-                requestId,
-                transactionId: value.TransID,
-                amount,
-                phone: maskPhone(value.MSISDN),
-                profit: amountValidation.profitAnalysis.netProfit,
-                profitable: amountValidation.profitAnalysis.netProfit > 0,
-                duration
-            });
-            
-            // 9. Alert if transaction is unprofitable (for business review)
+            // Alert if transaction is unprofitable
             if (amountValidation.profitAnalysis.netProfit <= 0 && process.env.ALERT_ON_UNPROFITABLE === 'true') {
                 try {
-                    await fetch(process.env.ALERT_WEBHOOK_URL, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            type: 'UNPROFITABLE_TRANSACTION',
-                            requestId,
-                            transactionId: value.TransID,
-                            amount,
-                            profitAnalysis: amountValidation.profitAnalysis,
-                            time: new Date().toISOString()
-                        })
+                    await axios.post(process.env.ALERT_WEBHOOK_URL, {
+                        type: 'UNPROFITABLE_TRANSACTION',
+                        requestId,
+                        transactionId: value.TransID,
+                        amount: amountValidation.amount,
+                        profitAnalysis: amountValidation.profitAnalysis,
+                        time: new Date().toISOString()
+                    }, {
+                        headers: { 'Content-Type': 'application/json' }
                     });
                 } catch (alertError) {
-                    // Silent fail
+                    console.warn(`⚠️ Alert failed: ${alertError.message}`);
                 }
             }
             
         } catch (error) {
             console.error(`❌ [${requestId}] Fatal error:`, error.message);
             
-            // Log EVERYTHING including full body
             const errorContext = {
                 error: error.message,
                 stack: error.stack,
                 requestId,
                 ip: getClientIp(req),
-                url: req.url,
-                method: req.method,
-                headers: req.headers,
-                timestamp: new Date().toISOString()
+                transactionId: req.body?.TransID,
+                amount: req.body?.TransAmount,
+                businessShortcode
             };
             
-            if (req.body) {
-                errorContext.bodyType = typeof req.body;
-                errorContext.bodyKeys = Object.keys(req.body);
-                errorContext.bodySample = JSON.stringify(req.body).substring(0, 500);
-                errorContext.fullBody = req.body;
-                errorContext.transactionId = req.body.TransID || 'MISSING';
-                errorContext.amount = req.body.TransAmount || 'MISSING';
-            } else {
-                errorContext.bodyStatus = 'NO BODY RECEIVED';
-            }
-            
-            // Try to use auditService, but don't crash if it fails
-            try {
-                await auditService.logError('c2b_confirmation_fatal', errorContext);
-            } catch (auditError) {
-                console.error('⚠️ Audit service failed:', auditError.message);
-                // Fallback to console
-                console.error('FATAL ERROR CONTEXT:', JSON.stringify(errorContext, null, 2));
-            }
-            
-            if (error.message.includes('constraint') || error.message.includes('duplicate key')) {
-                console.error(`👉 TIP: Database constraint issue for ${req.body?.TransID || 'unknown'}`);
-            }
+            await auditService.logError('c2b_confirmation_fatal', errorContext);
             
             // Send alert for critical errors
             if (process.env.ALERT_WEBHOOK_URL) {
                 try {
-                    await fetch(process.env.ALERT_WEBHOOK_URL, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            type: 'CRITICAL_PAYMENT_ERROR',
-                            requestId,
-                            transactionId: req.body?.TransID || 'UNKNOWN',
-                            error: error.message,
-                            time: new Date().toISOString(),
-                            environment: process.env.NODE_ENV
-                        })
+                    await axios.post(process.env.ALERT_WEBHOOK_URL, {
+                        type: 'CRITICAL_PAYMENT_ERROR',
+                        requestId,
+                        transactionId: req.body?.TransID || 'UNKNOWN',
+                        error: error.message,
+                        time: new Date().toISOString()
+                    }, {
+                        headers: { 'Content-Type': 'application/json' }
                     });
                 } catch (alertError) {
-                    // Silent fail
+                    console.warn(`⚠️ Critical alert failed: ${alertError.message}`);
                 }
             }
         }
@@ -656,17 +523,18 @@ export const checkTransactionStatus = async (req, res) => {
             return res.status(404).json({ error: 'Transaction not found' });
         }
         
-        // Calculate profitability for response
         const profitAnalysis = calculateProfit(transaction.amount);
         
         return res.status(200).json({
-            status: 'success',
-            transaction: {
+            success: true,
+            data: {
                 id: transaction.transaction_id,
                 amount: transaction.amount,
                 phone: maskPhone(transaction.phone),
                 status: transaction.status,
                 time: transaction.created_at,
+                business_shortcode: transaction.business_shortcode,
+                request_type: transaction.request_type,
                 profitability: {
                     netProfit: profitAnalysis.netProfit,
                     isProfitable: profitAnalysis.netProfit > 0
@@ -680,8 +548,5 @@ export const checkTransactionStatus = async (req, res) => {
     }
 };
 
-// ============================================
-// 📊 EXPORT CONFIG FOR OTHER FILES
-// ============================================
 export const getMinimumAmount = () => transactionRules.minAmount;
 export const getMaximumAmount = () => transactionRules.maxAmount;
