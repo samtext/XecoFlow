@@ -4,7 +4,7 @@ import stkService from './stk.service.js';
 import mpesaConfig from '../config/mpesa.js'; 
 import crypto from 'crypto';
 import { normalizePhone } from '../utils/phoneUtils.js';
-import { db as BusinessAccount } from '../models/businessAccount.model.js';
+import BusinessAccount from '../models/businessAccount.model.js';
 
 class C2bService {
     /**
