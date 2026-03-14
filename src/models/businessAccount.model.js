@@ -1,6 +1,6 @@
 // Renamed the import to supabaseAdmin to avoid naming conflict with the export
 import { db as supabaseAdmin } from '../config/db.js'; 
-import { DB_MAPPING } from './systemRules.js'; 
+import { DB_MAPPING } from '../config/systemRules.js'; 
 import crypto from 'crypto';
 
 /**
