@@ -6,13 +6,11 @@ const registerUrls = async () => {
         console.log("🔑 Step 1: Fetching Fresh Access Token...");
         const accessToken = await mpesaService.getAccessToken();
 
-        // Patrick from Safaricom specifically said use V2
         const url = "https://api.safaricom.co.ke/mpesa/c2b/v2/registerurl";
         
         const payload = {
-            ShortCode: "7450249", // Your Business Short Code
-            ResponseType: "Completed", 
-            // 🚨 UPDATED: Removed the word 'mpesa' from the URLs to satisfy Safaricom's security rules
+            ShortCode: "4938110", // ✅ Updated to your actual Till number
+            ResponseType: "Cancelled", // ✅ Updated to 'Cancelled' to force validation compliance
             ConfirmationURL: "https://xecoflow.onrender.com/api/v1/payments/c2b-confirmation",
             ValidationURL: "https://xecoflow.onrender.com/api/v1/payments/c2b-validation"
         };
