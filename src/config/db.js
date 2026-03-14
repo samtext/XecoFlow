@@ -1,8 +1,8 @@
-import { supabase, supabaseAdmin } from './supabase.js';
+import { supabase, supabaseAdmin } from './supabase.js'; // ✅ Import supabase clients
 import { DB_MAPPING } from './systemRules.js'; 
 import crypto from 'crypto';
 
-// ❌ REMOVED: import BusinessAccount from '../models/businessAccount.model.js';
+// ❌ DO NOT import db from itself!
 
 /**
  * BIG-SYSTEM-V1.2 | DATABASE MANAGER
