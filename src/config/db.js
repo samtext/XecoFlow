@@ -4,7 +4,7 @@ import crypto from 'crypto';
 
 /**
  * BIG-SYSTEM-V1.2 | DATABASE MANAGER
- * INFRASTRUCTURE LAYER - Complete with all helper functions
+ * INFRASTRUCTURE LAYER ONLY - No business logic
  */
 export const db = {
     /**
@@ -216,7 +216,7 @@ export const db = {
             if (error) throw error;
             
             if (data) {
-                await db.logTransactionEvent(
+                await this.logTransactionEvent(
                     transactionId,
                     businessShortcode || data.business_shortcode,
                     'TRANSACTION_ACCESSED',
@@ -388,11 +388,11 @@ export const db = {
     },
 
     // =========================================================
-    // 🔐 NEW HELPER FUNCTIONS (Required by Controller)
+    // 🔐 HELPER FUNCTIONS (Pure infrastructure)
     // =========================================================
 
     /**
-     * ✅ Log webhook attempt (Required by Controller)
+     * ✅ Log webhook attempt
      */
     logWebhookAttempt: async (transactionId, businessShortcode, attempt, success, response) => {
         try {
@@ -417,7 +417,7 @@ export const db = {
     },
 
     /**
-     * ✅ Log critical failure for manual intervention
+     * ✅ Log critical failure
      */
     logCriticalFailure: async (transactionId, businessShortcode, failureType, data) => {
         try {
@@ -434,91 +434,17 @@ export const db = {
             
             if (error) throw error;
             
-            // Also log to console with high visibility
-            console.error(`🚨 CRITICAL FAILURE [${failureType}]: Transaction ${transactionId} for business ${businessShortcode}`);
+            console.error(`🚨 CRITICAL FAILURE [${failureType}]: Transaction ${transactionId}`);
             
             return { success: true };
         } catch (error) {
             console.error("❌ CRITICAL: Failed to log critical failure:", error.message);
-            // Don't throw here, just log to console to avoid crashing the process
             return { success: false, error: error.message };
         }
     },
 
     /**
-     * ✅ Get unresolved critical failures (for admin dashboard)
-     */
-    getUnresolvedFailures: async (businessShortcode = null) => {
-        try {
-            let query = supabaseAdmin
-                .from('critical_failures')
-                .select('*')
-                .eq('resolved', false)
-                .order('created_at', { ascending: false });
-            
-            if (businessShortcode) {
-                query = query.eq('business_shortcode', businessShortcode);
-            }
-            
-            const { data, error } = await query;
-            
-            if (error) throw error;
-            return { success: true, data };
-        } catch (error) {
-            console.error("❌ DB_ERROR: Failed to get unresolved failures:", error.message);
-            return { success: false, error: error.message };
-        }
-    },
-
-    /**
-     * ✅ Resolve a critical failure (mark as handled)
-     */
-    resolveCriticalFailure: async (failureId, resolvedBy) => {
-        try {
-            const { error } = await supabaseAdmin
-                .from('critical_failures')
-                .update({
-                    resolved: true,
-                    resolved_at: new Date().toISOString(),
-                    resolved_by: resolvedBy
-                })
-                .eq('id', failureId);
-            
-            if (error) throw error;
-            return { success: true };
-        } catch (error) {
-            console.error("❌ DB_ERROR: Failed to resolve critical failure:", error.message);
-            return { success: false, error: error.message };
-        }
-    },
-
-    /**
-     * ✅ Get all transactions that need healing
-     */
-    getStuckTransactions: async (businessShortcode = null, minutesOld = 5) => {
-        try {
-            let query = supabaseAdmin
-                .from('airtime_transactions')
-                .select('*')
-                .eq('status', 'PENDING_PAYMENT')
-                .lt('created_at', new Date(Date.now() - minutesOld * 60000).toISOString());
-            
-            if (businessShortcode) {
-                query = query.eq('business_shortcode', businessShortcode);
-            }
-            
-            const { data, error } = await query;
-            
-            if (error) throw error;
-            return { success: true, data };
-        } catch (error) {
-            console.error("❌ DB_ERROR: Failed to get stuck transactions:", error.message);
-            return { success: false, error: error.message };
-        }
-    },
-
-    /**
-     * ✅ Get pending webhooks for retry
+     * ✅ Get pending webhooks
      */
     getPendingWebhooks: async (maxAgeMinutes = 60) => {
         try {
@@ -579,7 +505,7 @@ export const db = {
             
             if (error) throw error;
             
-            await db.logTransactionEvent(
+            await this.logTransactionEvent(
                 transactionId,
                 businessShortcode,
                 'CLIENT_WEBHOOK_FORWARDED',
@@ -594,123 +520,7 @@ export const db = {
     },
 
     /**
-     * ✅ Create external transaction
-     */
-    createExternalTransaction: async (businessShortcode, transactionData) => {
-        try {
-            const transaction = {
-                ...transactionData,
-                business_shortcode: businessShortcode,
-                request_type: 'EXTERNAL',
-                status: 'INITIATED',
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-            };
-            
-            const { data, error } = await supabaseAdmin
-                .from('airtime_transactions')
-                .insert([transaction])
-                .select()
-                .single();
-            
-            if (error) throw error;
-            
-            await db.logTransactionEvent(
-                data.transaction_id,
-                businessShortcode,
-                'STK_INITIATED_BY_CLIENT',
-                { client_request: transactionData }
-            );
-            
-            return { success: true, data };
-        } catch (error) {
-            console.error("❌ DB_ERROR: Failed to create external transaction:", error.message);
-            return { success: false, error: error.message };
-        }
-    },
-
-    /**
-     * ✅ Record M-PESA callback
-     */
-    recordMpesaCallback: async (transactionId, businessShortcode, callbackData) => {
-        try {
-            await db.logTransactionEvent(
-                transactionId,
-                businessShortcode,
-                'MPESA_CALLBACK_RECEIVED',
-                { callback: callbackData }
-            );
-            
-            const newStatus = callbackData.ResultCode === 0 ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED';
-
-            const { data, error } = await supabaseAdmin
-                .from('airtime_transactions')
-                .update({
-                    status: newStatus,
-                    mpesa_receipt: callbackData.TransID,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('transaction_id', transactionId)
-                .eq('business_shortcode', businessShortcode)
-                .select()
-                .single();
-            
-            if (error) throw error;
-            
-            return { 
-                success: true, 
-                data,
-                shouldForwardWebhook: callbackData.ResultCode === 0
-            };
-        } catch (error) {
-            console.error("❌ DB_ERROR: Failed to record M-PESA callback:", error.message);
-            return { success: false, error: error.message };
-        }
-    },
-
-    /**
-     * ✅ Health check with detailed diagnostics
-     */
-    getDetailedHealth: async () => {
-        try {
-            const results = {
-                timestamp: new Date().toISOString(),
-                services: {},
-                transactions: {},
-                webhooks: {},
-                critical_failures: {}
-            };
-            
-            const dbHealth = await db.checkConnection();
-            results.services.database = dbHealth;
-            
-            const { data: counts } = await supabaseAdmin
-                .from('airtime_transactions')
-                .select('status, count')
-                .in('status', ['PENDING_PAYMENT', 'PROCESSING', 'HEALING', 'FAILED']);
-            
-            if (counts) results.transactions.stuck = counts;
-            
-            const pendingWebhooks = await db.getPendingWebhooks(1440);
-            results.webhooks.pending = pendingWebhooks.data?.length || 0;
-            
-            const unresolvedFailures = await db.getUnresolvedFailures();
-            results.critical_failures.unresolved = unresolvedFailures.data?.length || 0;
-            results.critical_failures.list = unresolvedFailures.data || [];
-            
-            return { success: true, data: results };
-        } catch (error) {
-            console.error("❌ DB_ERROR: Failed to get detailed health:", error.message);
-            return { success: false, error: error.message };
-        }
-    },
-
-    // =========================================================
-    // 🔐 Security & Encryption Utilities
-    // =========================================================
-
-    /**
-     * ✅ Constant-time string comparison (prevents timing attacks)
+     * ✅ Constant-time string comparison
      */
     safeCompare: (a, b) => {
         try {
@@ -725,6 +535,9 @@ export const db = {
         }
     },
 
+    /**
+     * ✅ Hash a string
+     */
     hashString: (input) => {
         return crypto
             .createHash('sha256')
@@ -732,10 +545,16 @@ export const db = {
             .digest('hex');
     },
 
+    /**
+     * ✅ Generate secure token
+     */
     generateSecureToken: () => {
         return crypto.randomBytes(32).toString('hex');
     },
 
+    /**
+     * ✅ Encrypt sensitive data
+     */
     encryptSensitiveData: async (data) => {
         try {
             const encryptionKey = process.env.ENCRYPTION_KEY;
@@ -768,6 +587,9 @@ export const db = {
         }
     },
 
+    /**
+     * ✅ Decrypt sensitive data
+     */
     decryptSensitiveData: async (encryptedData) => {
         try {
             const encryptionKey = process.env.ENCRYPTION_KEY;
