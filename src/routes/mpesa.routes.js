@@ -199,9 +199,9 @@ router.post('/hooks/stk-callback', ...webhookMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 🛡️ C2B VALIDATION
+// 🛡️ C2B VALIDATION - FIXED PATH to match registered URL
 // ============================================
-router.post('/c2b-validation', ...webhookMiddleware, async (req, res) => {
+router.post('/payments/c2b-validation', ...webhookMiddleware, async (req, res) => {
     console.log('\n⚪ ===== C2B VALIDATION RECEIVED =====');
     console.log('Body:', JSON.stringify(req.body, null, 2));
     
@@ -230,9 +230,9 @@ router.post('/c2b-validation', ...webhookMiddleware, async (req, res) => {
 });
 
 // ============================================
-// 💰 C2B CONFIRMATION (Reversal Disabled)
+// 💰 C2B CONFIRMATION - FIXED PATH to match registered URL
 // ============================================
-router.post('/c2b-confirmation', ...webhookMiddleware, async (req, res) => {
+router.post('/payments/c2b-confirmation', ...webhookMiddleware, async (req, res) => {
     try {
         console.log('\n🟣 ===== C2B CONFIRMATION RECEIVED =====');
         console.log('Body:', JSON.stringify(req.body, null, 2));
