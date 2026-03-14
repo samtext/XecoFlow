@@ -1,4 +1,4 @@
-import { supabase, supabaseAdmin } from './supabase.js';
+import { db } from '../config/db.js';
 import { DB_MAPPING } from './systemRules.js'; 
 import crypto from 'crypto';
 
