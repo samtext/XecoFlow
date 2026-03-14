@@ -2,7 +2,7 @@ import Joi from 'joi';
 import { randomUUID } from 'crypto';
 import stkService from '../services/stk.service.js';
 import c2bService from '../services/c2b.service.js';
-import reversalService from '../services/reversal.service.js'; // ✅ RESTORED
+import reversalService from '../services/reversal.service.js';
 import * as auditService from '../services/auditService.js';
 import { transactionRules, calculateProfit } from '../config/businessRules.js';
 
@@ -44,7 +44,7 @@ const normalizePhone = (phone) => {
 };
 
 // ============================================
-// 💰 AMOUNT VALIDATION HELPER
+// 💰 AMOUNT VALIDATION HELPER (FIX 1: Changed error code)
 // ============================================
 const validateAmount = (amount, transactionId = 'unknown') => {
     const parsedAmount = parseFloat(amount);
@@ -52,7 +52,7 @@ const validateAmount = (amount, transactionId = 'unknown') => {
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
         return {
             valid: false,
-            code: "C2B00016",
+            code: "C2B00016", // Invalid amount format
             message: "Invalid amount format",
             amount: 0
         };
@@ -67,7 +67,7 @@ const validateAmount = (amount, transactionId = 'unknown') => {
         
         return {
             valid: false,
-            code: "C2B00016",
+            code: "C2B00012", // 🔥 FIX 1: Changed from C2B00016 to C2B00012 (Invalid/Below Minimum Amount)
             message: transactionRules.messages.belowMinimum(transactionRules.minAmount),
             amount: parsedAmount
         };
@@ -296,7 +296,7 @@ export const handleMpesaCallback = async (req, res) => {
 };
 
 // ============================================
-// 🛡️ LANE 2: C2B VALIDATION
+// 🛡️ LANE 2: C2B VALIDATION (FIX 2 & 3 applied)
 // ============================================
 export const handleC2BValidation = async (req, res) => {
     const requestId = randomUUID();
@@ -306,6 +306,9 @@ export const handleC2BValidation = async (req, res) => {
         
         console.log(`\n🔍 [${requestId}] C2B VALIDATION RECEIVED`);
         console.log(`   IP: ${ipAddress}`);
+        
+        // Measure response time to ensure we're fast enough
+        const startTime = Date.now();
         
         // 1. AMOUNT VALIDATION FIRST (KES 10 minimum)
         const amountValidation = validateAmount(req.body.TransAmount, req.body.TransID);
@@ -320,8 +323,12 @@ export const handleC2BValidation = async (req, res) => {
                 reason: amountValidation.message
             });
             
+            const responseTime = Date.now() - startTime;
+            console.log(`⏱️ [${requestId}] Validation response time: ${responseTime}ms`);
+            
+            // 🔥 FIX 2: Using C2B00012 for stronger rejection signal
             return res.status(200).json({ 
-                ResultCode: amountValidation.code,
+                ResultCode: amountValidation.code, // Now returns C2B00012 for low amounts
                 ResultDesc: amountValidation.message
             });
         }
@@ -360,7 +367,8 @@ export const handleC2BValidation = async (req, res) => {
             ipAddress
         });
         
-        console.log(`✅ [${requestId}] Validation accepted`);
+        const responseTime = Date.now() - startTime;
+        console.log(`✅ [${requestId}] Validation accepted (${responseTime}ms)`);
         
         return res.status(200).json({ 
             ResultCode: 0, 
@@ -384,8 +392,12 @@ export const handleC2BValidation = async (req, res) => {
             ip: getClientIp(req)
         });
         
-        // Accept to prevent retries, but log the error
-        return res.status(200).json({ ResultCode: 0, ResultDesc: "Accepted" });
+        // 🔥 FIX 3: In case of error, REJECT rather than accept
+        // In fintech, it's safer to reject if the server is confused
+        return res.status(200).json({ 
+            ResultCode: 1, 
+            ResultDesc: "Rejected due to internal error" 
+        });
     }
 };
 
